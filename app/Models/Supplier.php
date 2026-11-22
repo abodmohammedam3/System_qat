@@ -1,0 +1,39 @@
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+
+class Supplier extends Model
+{
+    protected $table = 'suppliers';
+
+    protected $primaryKey = 'suplierID';
+
+    public $incrementing = true;
+
+    protected $keyType = 'int';
+
+    public $timestamps = false;
+
+    protected $fillable = [
+        'accountID',
+        'supName',
+        'supPhone',
+        'supArea',
+        'is_active',
+    ];
+
+    protected $casts = [
+        'is_active' => 'integer',
+    ];
+
+    public function account()
+    {
+        return $this->belongsTo(
+            Accounting\CharAccount::class,
+            'accountID',
+            'accountID'
+        );
+    }
+}

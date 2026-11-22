@@ -1,0 +1,1513 @@
+/* =========================================================
+   فاتورة الشراء — يعتمد على النظام الموحّد للنوافذ
+   ========================================================= */
+
+const SYSTEM_CURRENCY_ID = window.PURCHASE_SYSTEM_CURRENCY_ID || null;
+const SYSTEM_CURRENCY_CODE = window.PURCHASE_SYSTEM_CURRENCY_CODE || '';
+
+/* ✅ الوحدة الافتراضية */
+const DEFAULT_PURCHASE_UNIT_NAMES = ['كيلو', 'كجم', 'كيلوجرام', 'KG'];
+
+function isInvoiceInSystemCurrency() {
+    const coinId = document.getElementById('coinsID')?.value || '';
+    if (!SYSTEM_CURRENCY_ID || !coinId) return false;
+    return String(coinId) === String(SYSTEM_CURRENCY_ID);
+}
+
+function findDefaultKiloUnit() {
+    const units = (typeof lookupCache !== 'undefined' && lookupCache.units) || [];
+    for (const name of DEFAULT_PURCHASE_UNIT_NAMES) {
+        const found = units.find(u => u.UnitName === name);
+        if (found) return found;
+    }
+    return null;
+}
+
+/* ✅ طرق الدفع: أجل / نقدي / بنك */
+const PAYMENT_METHOD_TO_INT = { credit: 1, cash: 2, bank: 3 };
+const PAYMENT_METHOD_TO_STR = { 1: 'credit', 2: 'cash', 3: 'bank' };
+const PAYMENT_METHOD_LABELS = { 1: 'أجل', 2: 'نقدي', 3: 'بنك / محفظة / صراف' };
+
+let invoiceMode = 'view';
+let currentInvoiceId = null;
+let currentInvoiceIsPosted = false;
+let currentInvoiceHasReturns = false;
+let isSavingInvoice = false;
+let editSnapshot = null;
+let addSnapshot = null;   // ✅ لقطة مرجعية لوضع الإضافة (لحارس التنقّل)
+let invoiceSearchTimer = null;
+
+const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]')?.content || '';
+
+function apiHeaders(json = false) {
+    const h = { 'Accept': 'application/json', 'X-CSRF-TOKEN': CSRF_TOKEN };
+    if (json) h['Content-Type'] = 'application/json';
+    return h;
+}
+
+async function apiGet(url) {
+    const r = await fetch(url, { headers: apiHeaders() });
+    if (!r.ok) throw new Error(`فشل الطلب: ${r.status}`);
+    return r.json();
+}
+
+async function apiSend(url, method, body) {
+    const r = await fetch(url, {
+        method, headers: apiHeaders(true), body: JSON.stringify(body),
+    });
+    const json = await r.json().catch(() => ({}));
+    if (!r.ok) {
+        let message = json.message || 'فشل الطلب';
+        if (json.errors) message = Object.values(json.errors).flat().join(' | ');
+        else if (json.error) message = json.error;
+
+        const e = new Error(message);
+        e.errors = json.errors;
+        e.raw = json;
+        console.error('API Error:', json);
+        throw e;
+    }
+    return json;
+}
+
+function notify(message, type = 'info') {
+    if (typeof window.showSystemToast === 'function') {
+        window.showSystemToast(message, type);
+    } else {
+        console.warn(`[${type}] ${message}`);
+        alert(message);
+    }
+}
+
+function formatMoney(v) {
+    if (window.Utils && typeof Utils.formatAmount === 'function') {
+        return Utils.formatAmount(v);
+    }
+    return Number(v || 0).toLocaleString('en-US', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+    });
+}
+
+/** تنسيق سعر الصرف بدون أصفار زائدة */
+function formatRate(v) {
+    if (window.Utils && typeof Utils.formatRate === 'function') {
+        return Utils.formatRate(v);
+    }
+    return String(parseFloat(Number(v || 0).toFixed(6)));
+}
+
+/**
+ * ✅ استخراج الحقول من استجابة API
+ */
+function extractPayload(res) {
+    if (res && res.header) {
+        return { header: res.header, details: res.details || [] };
+    }
+    if (res && res.data && res.data.header) {
+        return { header: res.data.header, details: res.data.details || [] };
+    }
+    return { header: {}, details: [] };
+}
+
+/* =========================================================
+   ✅ سعر الصرف خاص بالفاتورة:
+      - عملة النظام → readonly = 1
+      - عملة أجنبية → قابل للتعديل (إلا في وضع العرض)
+   ========================================================= */
+function protectExchangeRateInput() {
+    const rateEl = document.getElementById('PuInExchangeRate2');
+    if (!rateEl) return;
+
+    const isSys = isInvoiceInSystemCurrency();
+    const isView = invoiceMode === 'view';
+
+    if (isSys || isView) {
+        rateEl.readOnly = true;
+        rateEl.tabIndex = -1;
+        rateEl.classList.add('bg-light');
+        rateEl.title = isSys
+            ? 'سعر صرف عملة النظام ثابت = 1'
+            : 'وضع العرض — لا يمكن التعديل';
+    } else {
+        rateEl.readOnly = false;
+        rateEl.tabIndex = 0;
+        rateEl.classList.remove('bg-light');
+        rateEl.title = 'سعر صرف هذه الفاتورة (يمكن تجاوزه عن السعر اليومي)';
+    }
+}
+
+function applyExchangeRateState() {
+    const rateEl = document.getElementById('PuInExchangeRate2');
+    if (!rateEl) return;
+
+    const coinId = document.getElementById('coinsID')?.value || '';
+
+    if (!coinId) {
+        rateEl.value = '';
+        protectExchangeRateInput();
+        return;
+    }
+
+    if (isInvoiceInSystemCurrency()) {
+        rateEl.value = '1';
+    }
+
+    /* ✅ إعادة ضبط readonly حسب العملة/الوضع */
+    protectExchangeRateInput();
+}
+
+function registerCurrencyLookupHook() {
+    if (typeof LookupConfigs === 'undefined') return;
+
+    LookupConfigs.currency.onSelect = (row) => {
+        const rateEl = document.getElementById('PuInExchangeRate2');
+        const codeEl = document.getElementById('currencyCode');
+
+        if (codeEl) codeEl.value = row.coinsCode ?? '';
+
+        if (rateEl) {
+            const isSys = String(row.coinsID) === String(SYSTEM_CURRENCY_ID);
+            const rate = isSys ? 1 : (row.coinsExchangeRate ?? 1);
+            rateEl.value = formatRate(rate);
+        }
+
+        applyExchangeRateState();
+        calculateTotals();
+    };
+}
+
+function registerItemLookupHook() {
+    if (typeof LookupConfigs === 'undefined') return;
+    LookupConfigs.item.onSelect = (row, target) => {
+        const tr = target.closest('tr');
+        if (!tr || !tr.classList.contains('purchase-detail-row')) return;
+
+        target.dataset.itemId = row.itemID ?? '';
+        setTimeout(() => tr.querySelector('.row-type')?.focus(), 200);
+    };
+}
+
+function registerTypeLookupHook() {
+    if (typeof LookupConfigs === 'undefined') return;
+    LookupConfigs.type.onSelect = (row, target) => {
+        const tr = target.closest('tr');
+        if (!tr || !tr.classList.contains('purchase-detail-row')) return;
+
+        target.dataset.typeId = row.id ?? '';
+        setTimeout(() => tr.querySelector('.row-code')?.focus(), 200);
+    };
+}
+
+/* =========================================================
+   ✅ تنظيف الـ modals العالقة
+   ========================================================= */
+function cleanupStuckModals() {
+    document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
+    document.body.classList.remove('modal-open');
+    document.body.style.removeProperty('overflow');
+    document.body.style.removeProperty('padding-right');
+
+    document.querySelectorAll('.modal.show').forEach(modalEl => {
+        const instance = bootstrap.Modal.getInstance(modalEl);
+        if (instance) {
+            try { instance.hide(); } catch (e) { /* ignore */ }
+        }
+        modalEl.classList.remove('show');
+        modalEl.style.display = 'none';
+        modalEl.setAttribute('aria-hidden', 'true');
+    });
+
+    document.querySelectorAll('.offcanvas-backdrop').forEach(el => el.remove());
+}
+
+/* =========================================================
+   التهيئة
+   ========================================================= */
+
+document.addEventListener('DOMContentLoaded', () => {
+    cleanupStuckModals();
+
+    registerCurrencyLookupHook();
+    registerItemLookupHook();
+    registerTypeLookupHook();
+
+    // ✅ حماية حقل سعر الصرف من أي إدخال
+    protectExchangeRateInput();
+
+    setInvoiceMode('view');
+    clearInvoiceForm();
+
+    setTimeout(cleanupStuckModals, 100);
+    setTimeout(cleanupStuckModals, 500);
+});
+
+window.addEventListener('load', () => {
+    setTimeout(cleanupStuckModals, 200);
+    protectExchangeRateInput();
+});
+
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+        cleanupStuckModals();
+    }
+});
+
+/* =========================================================
+   أوضاع الشاشة
+   ========================================================= */
+
+function setInvoiceMode(mode) {
+    invoiceMode = mode;
+
+    document.querySelectorAll(
+        '#PurchaseInvoicesON2, #PurchaseInvoicesDate2, #PuInPaymentMethod2, ' +
+        '#paymentAccount, #supplierName, #currencyName, ' +
+        '#warehouseName, #PuInStatement2, #invoiceReference, ' +
+        '#PuInTaxCost, #PuInTransportation, #PuInOtherCost, #otherCostDescription'
+    ).forEach(el => { el.disabled = (mode === 'view'); });
+
+    document.querySelectorAll('#purchaseInvoiceDetails .purchase-detail-row')
+        .forEach(row => enableRow(row));
+
+    const addBtn = document.getElementById('btnAddInvoiceRow');
+    if (addBtn) addBtn.disabled = (mode === 'view');
+
+    const newBtn = document.getElementById('btnNewInvoice');
+    if (newBtn) newBtn.disabled = (mode !== 'view');
+
+    const saveBtn = document.getElementById('btnSaveInvoice');
+    const saveNewBtn = document.getElementById('btnSaveAndNew');
+    const cancelBtn = document.getElementById('btnCancelInvoice');
+
+    if (mode === 'view') {
+        if (saveBtn) saveBtn.disabled = true;
+        if (saveNewBtn) saveNewBtn.disabled = true;
+        if (cancelBtn) cancelBtn.classList.add('d-none');
+
+        const paymentInput = document.getElementById('paymentAccount');
+        if (paymentInput) paymentInput.disabled = true;
+
+        const paymentContainer = document.getElementById('paymentAccountContainer');
+        if (paymentContainer) paymentContainer.classList.add('d-none');
+    } else {
+        if (saveBtn) saveBtn.disabled = false;
+        if (saveNewBtn) saveNewBtn.disabled = false;
+        if (cancelBtn) cancelBtn.classList.remove('d-none');
+        paymentMethodChanged();
+    }
+
+    updateSearchButton();
+    updatePostingButtons();
+    applyExchangeRateState();
+    protectExchangeRateInput();
+}
+
+/* =========================================================
+   ✅ إدارة زر البحث
+   ========================================================= */
+
+function updateSearchButton() {
+    const searchBtn = document.getElementById('btnSearchInvoice');
+    if (!searchBtn) return;
+
+    const hasInvoice = !!currentInvoiceId;
+    const isViewMode = invoiceMode === 'view';
+
+    searchBtn.disabled = !isViewMode || hasInvoice;
+}
+
+/* =========================================================
+   ✅ إدارة أزرار الترحيل / إلغاء الترحيل / التعديل
+   ========================================================= */
+
+function updatePostingButtons() {
+    const editBtn = document.getElementById('btnEditInvoice');
+    const postBtn = document.getElementById('btnPostInvoice');
+    const unpostBtn = document.getElementById('btnUnpostInvoice');
+    const printBtn = document.getElementById('btnPrintInvoice');
+
+    const hasData = hasInvoiceData();
+    const isPosted = currentInvoiceIsPosted;
+    const isView = invoiceMode === 'view';
+
+    if (editBtn) {
+        editBtn.disabled = !hasData || isPosted || !isView;
+        editBtn.classList.toggle('d-none', isPosted);
+
+        if (currentInvoiceHasReturns && hasData && isView) {
+            editBtn.title = 'لا يمكن تعديل فاتورة لها مرتجعات';
+        } else {
+            editBtn.title = 'تعديل الفاتورة';
+        }
+    }
+
+    if (postBtn) {
+        const show = hasData && !isPosted;
+        postBtn.classList.toggle('d-none', !show);
+        postBtn.disabled = !hasData || isPosted || !isView;
+    }
+
+    if (unpostBtn) {
+        const show = hasData && isPosted;
+        unpostBtn.classList.toggle('d-none', !show);
+        unpostBtn.disabled = !hasData || !isPosted || !isView;
+    }
+
+    if (printBtn) {
+        printBtn.disabled = !hasData;
+    }
+}
+
+async function resetInvoice() {
+    cleanupStuckModals();
+
+    clearInvoiceForm();
+    setInvoiceMode('add');
+
+    const numberEl = document.getElementById('PurchaseInvoicesON2');
+    if (!numberEl) {
+        notify('حقل رقم الفاتورة غير موجود', 'danger');
+        return;
+    }
+
+    try {
+        const res = await apiGet('/operation/purchases/invoicesPurch/next-number');
+        numberEl.value = res.next_number || '';
+    } catch (e) {
+        notify('تعذّر جلب رقم الفاتورة التالي', 'danger');
+    }
+
+    // تطبيق القيم الافتراضية من النظام
+    await applyDefaultValues();
+
+    addInvoiceRow();
+
+    const supplierEl = document.getElementById('supplierName');
+    if (supplierEl) supplierEl.focus();
+
+    // ✅ لقطة مرجعية لوضع الإضافة — بعد كل التهيئة التلقائية (الرقم/التاريخ/صف فارغ)
+    addSnapshot = takeSnapshot();
+}
+
+function clearInvoiceForm() {
+    document.querySelectorAll(
+        '#PurchaseInvoicesON2, #PurchaseInvoicesDate2, #PuInPaymentMethod2, ' +
+        '#paymentAccount, #supplierName, #currencyName, ' +
+        '#warehouseName, #PuInStatement2, #invoiceReference, ' +
+        '#PuInTaxCost, #PuInTransportation, #PuInOtherCost, #otherCostDescription'
+    ).forEach(el => {
+        if (el.tagName === 'SELECT') el.selectedIndex = 0;
+        else el.value = '';
+    });
+
+    ['suplierID', 'coinsID', 'currencyCode', 'warehouseID',
+        'paymentAccountId', 'AmountWords']
+        .forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+
+    const rateEl = document.getElementById('PuInExchangeRate2');
+    if (rateEl) {
+        rateEl.value = '';
+        rateEl.readOnly = true;
+        rateEl.disabled = false;
+        rateEl.classList.add('bg-light');
+    }
+
+    const expEl = document.getElementById('PuInExpenses');
+    if (expEl) expEl.value = '0';
+
+    const extraEl = document.getElementById('extraCostsTotal');
+    if (extraEl) extraEl.textContent = '0.00';
+
+    setEmptyDetailsMessage();
+
+    const zeroTargets = [
+        'totalDiscountForeign',
+        'totalDiscountLocal',
+        'invoiceTotalForeign',
+        'invoiceTotalLocal',
+    ];
+
+    zeroTargets.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.textContent = '0.00';
+            el.style.display = '';
+            if (id === 'invoiceTotalLocal' || id === 'totalDiscountLocal') {
+                el.className = 'amount-local';
+            } else {
+                el.className = 'amount-foreign';
+            }
+        }
+    });
+
+    hidePaymentAccounts();
+
+    const otherCostDesc = document.getElementById('otherCostDescriptionContainer');
+    if (otherCostDesc) otherCostDesc.classList.add('d-none');
+
+    currentInvoiceId = null;
+    currentInvoiceIsPosted = false;
+    currentInvoiceHasReturns = false;
+    editSnapshot = null;
+    addSnapshot = null;   // ✅ لا لقطة مرجعية خارج وضع الإضافة
+
+    setInvoiceMode('view');
+}
+
+function setEmptyDetailsMessage() {
+    const tbody = document.getElementById('purchaseInvoiceDetails');
+    if (!tbody) return;
+
+    while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
+
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 10;
+    td.className = 'text-center text-muted py-4';
+    td.textContent = 'لا توجد أصناف مضافة إلى الفاتورة';
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+}
+
+function addInvoiceRow() {
+    if (invoiceMode === 'view') return;
+
+    const tbody = document.getElementById('purchaseInvoiceDetails');
+    if (!tbody) return;
+
+    const emptyTd = tbody.querySelector('td[colspan="10"]');
+    if (emptyTd) while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
+
+    const tpl = document.getElementById('invoiceRowTemplate');
+    if (!tpl) {
+        notify('قالب الصف غير موجود', 'danger');
+        return;
+    }
+
+    const row = tpl.content.firstElementChild.cloneNode(true);
+
+    const unitSelect = row.querySelector('.row-unit');
+    if (unitSelect && typeof lookupCache !== 'undefined') {
+        const emptyOpt = document.createElement('option');
+        emptyOpt.value = '';
+        emptyOpt.textContent = '— اختر الوحدة —';
+        unitSelect.appendChild(emptyOpt);
+
+        (lookupCache.units || []).forEach(u => {
+            const opt = document.createElement('option');
+            opt.value = u.UnitID;
+            opt.textContent = u.UnitName;
+            unitSelect.appendChild(opt);
+        });
+
+        const kiloUnit = findDefaultKiloUnit();
+        if (kiloUnit) {
+            unitSelect.value = String(kiloUnit.UnitID);
+        }
+    }
+
+    tbody.appendChild(row);
+    enableRow(row);
+    renumberRows();
+    calculateTotals();
+
+    return row;
+}
+
+function enableRow(row) {
+    if (!row) return;
+    row.querySelectorAll('input, select').forEach(el => {
+        if (!el.classList.contains('row-total')) {
+            el.disabled = (invoiceMode === 'view');
+        }
+    });
+    const btn = row.querySelector('button');
+    if (btn) btn.disabled = (invoiceMode === 'view');
+}
+
+function removeRow(btn) {
+    if (invoiceMode === 'view') return;
+    const row = btn.closest('tr');
+    if (row) row.remove();
+    renumberRows();
+    calculateTotals();
+
+    const tbody = document.getElementById('purchaseInvoiceDetails');
+    if (tbody && !tbody.querySelector('.purchase-detail-row')) setEmptyDetailsMessage();
+}
+
+function renumberRows() {
+    document.querySelectorAll('#purchaseInvoiceDetails .purchase-detail-row')
+        .forEach((r, i) => {
+            const numEl = r.querySelector('.row-num');
+            if (numEl) numEl.textContent = i + 1;
+        });
+}
+
+function calculateRow(input) {
+    const row = input.closest('tr');
+    if (!row) return;
+
+    const qty = parseFloat(row.querySelector('.row-weight')?.value) || 0;
+    const price = parseFloat(row.querySelector('.row-price')?.value) || 0;
+    const disc = parseFloat(row.querySelector('.row-discount')?.value) || 0;
+
+    const totalEl = row.querySelector('.row-total');
+    if (totalEl) totalEl.value = Math.max(0, qty * price - disc).toFixed(2);
+
+    calculateTotals();
+}
+
+function calculateTotals() {
+    let itemsTotal = 0, discountTotal = 0;
+
+    document.querySelectorAll('#purchaseInvoiceDetails .purchase-detail-row').forEach(row => {
+        const q = parseFloat(row.querySelector('.row-weight')?.value) || 0;
+        const p = parseFloat(row.querySelector('.row-price')?.value) || 0;
+        const d = parseFloat(row.querySelector('.row-discount')?.value) || 0;
+        itemsTotal += q * p;
+        discountTotal += d;
+    });
+
+    const expenses = parseFloat(document.getElementById('PuInExpenses')?.value) || 0;
+    const tax = parseFloat(document.getElementById('PuInTaxCost')?.value) || 0;
+    const trans = parseFloat(document.getElementById('PuInTransportation')?.value) || 0;
+    const other = parseFloat(document.getElementById('PuInOtherCost')?.value) || 0;
+
+    const extraCosts = expenses + tax + trans + other;
+    const extraEl = document.getElementById('extraCostsTotal');
+    if (extraEl) extraEl.textContent = formatMoney(extraCosts);
+
+    const net = Math.max(0, itemsTotal - discountTotal);
+    const totalFC = net;
+
+    const isSystemCurrency = isInvoiceInSystemCurrency();
+    const rate = parseFloat(document.getElementById('PuInExchangeRate2')?.value) || 1;
+    const effectiveRate = isSystemCurrency ? 1 : rate;
+    const totalBC = totalFC * effectiveRate;
+
+    renderAmountDisplay(
+        document.getElementById('totalDiscountForeign'),
+        document.getElementById('totalDiscountLocal'),
+        discountTotal,
+        discountTotal * effectiveRate,
+        isSystemCurrency
+    );
+
+    renderAmountDisplay(
+        document.getElementById('invoiceTotalForeign'),
+        document.getElementById('invoiceTotalLocal'),
+        totalFC,
+        totalBC,
+        isSystemCurrency
+    );
+
+    updateAmountWords(totalFC);
+}
+
+function renderAmountDisplay(foreignEl, localEl, amountFC, amountBC, isSystemCurrency) {
+    if (!foreignEl || !localEl) return;
+
+    const fcCode = document.getElementById('currencyCode')?.value || '';
+    const bcCode = SYSTEM_CURRENCY_CODE || '';
+
+    if (isSystemCurrency) {
+        foreignEl.style.display = 'none';
+        foreignEl.textContent = '';
+        localEl.textContent = `${formatMoney(amountFC)} ${fcCode}`.trim();
+        localEl.className = 'amount-single';
+        return;
+    }
+
+    foreignEl.style.display = '';
+    foreignEl.textContent = `${formatMoney(amountFC)} ${fcCode}`.trim();
+    localEl.textContent = `${formatMoney(amountBC)} ${bcCode}`.trim();
+    localEl.className = 'amount-local';
+}
+
+function updateAmountWords(total) {
+    const el = document.getElementById('AmountWords');
+    if (!el) return;
+
+    if (!total || total <= 0) { el.value = ''; return; }
+
+    if (window.Utils && typeof window.Utils.numberToWords === 'function') {
+        const currencyEl = document.getElementById('currencyName');
+        const currencyName = currencyEl ? currencyEl.value : '';
+        el.value = window.Utils.numberToWords(total, currencyName);
+    } else {
+        el.value = total.toFixed(2);
+    }
+}
+
+function exchangeRateChanged() {
+    /* ✅ إعادة احتساب الإجمالي بالعملة المحلية عند تغيير سعر الصرف */
+    const rateEl = document.getElementById('PuInExchangeRate2');
+    if (rateEl) {
+        const rate = parseFloat(rateEl.value);
+        if (!isNaN(rate) && rate <= 0) rateEl.value = '1';
+    }
+    calculateTotals();
+}
+
+function paymentMethodChanged(clearPrevious = false) {
+    if (clearPrevious) {
+        const inp = document.getElementById('paymentAccount');
+        const inpId = document.getElementById('paymentAccountId');
+        if (inp) inp.value = '';
+        if (inpId) inpId.value = '';
+    }
+
+    hidePaymentAccounts();
+
+    const methodEl = document.getElementById('PuInPaymentMethod2');
+    const container = document.getElementById('paymentAccountContainer');
+    const input = document.getElementById('paymentAccount');
+
+    if (!methodEl || !container || !input) return;
+
+    const method = methodEl.value;
+
+    if (!method || method === 'credit') {
+        container.classList.add('d-none');
+        input.disabled = true;
+        input.value = '';
+        const inpId = document.getElementById('paymentAccountId');
+        if (inpId) inpId.value = '';
+        return;
+    }
+
+    container.classList.remove('d-none');
+    input.disabled = (invoiceMode === 'view');
+
+    if (method === 'bank') {
+        input.dataset.lookup = 'bank';
+        input.dataset.lookupDisplayField = 'bankName';
+        input.dataset.lookupIdField = 'accountID';
+    } else {
+        input.dataset.lookup = 'box';
+        input.dataset.lookupDisplayField = 'boxName';
+        input.dataset.lookupIdField = 'accountID';
+    }
+
+    const labels = { cash: 'الصندوق', bank: 'الحساب البنكي / المحفظة / الصراف' };
+    const lbl = container.querySelector('label');
+    if (lbl) lbl.textContent = labels[method] || 'الحساب';
+}
+
+function hidePaymentAccounts() {
+    const el = document.getElementById('paymentAccountContainer');
+    if (el) el.classList.add('d-none');
+}
+
+function otherCostChanged() {
+    const v = parseFloat(document.getElementById('PuInOtherCost').value) || 0;
+    const c = document.getElementById('otherCostDescriptionContainer');
+    const d = document.getElementById('otherCostDescription');
+
+    if (v > 0) {
+        if (c) c.classList.remove('d-none');
+        if (d) d.disabled = (invoiceMode === 'view');
+    } else {
+        if (c) c.classList.add('d-none');
+        if (d) d.value = '';
+    }
+    calculateTotals();
+}
+
+/* =========================================================
+   البحث عن فاتورة — النقر على الصف
+   ========================================================= */
+
+function searchInvoice() {
+    const modalEl = document.getElementById('invoiceSearchModal');
+    if (!modalEl) return;
+
+    const searchInput = document.getElementById('invoiceSearchInput');
+    if (searchInput) searchInput.value = '';
+
+    const tb = document.getElementById('invoiceSearchResults');
+    tb.replaceChildren();
+
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 9;
+    td.className = 'text-center text-muted py-4';
+    td.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span> جاري التحميل...';
+    tr.appendChild(td);
+    tb.appendChild(tr);
+
+    bootstrap.Modal.getOrCreateInstance(modalEl).show();
+
+    setTimeout(() => {
+        searchInput?.focus();
+        performInvoiceSearch();
+    }, 250);
+}
+
+function debouncedInvoiceSearch() {
+    clearTimeout(invoiceSearchTimer);
+    invoiceSearchTimer = setTimeout(performInvoiceSearch, 350);
+}
+
+function clearInvoiceSearch() {
+    const searchInput = document.getElementById('invoiceSearchInput');
+    if (searchInput) searchInput.value = '';
+
+    performInvoiceSearch();
+
+    setTimeout(() => {
+        searchInput?.focus();
+    }, 100);
+}
+
+async function performInvoiceSearch() {
+    const search = document.getElementById('invoiceSearchInput').value.trim();
+    const tbody = document.getElementById('invoiceSearchResults');
+    tbody.replaceChildren();
+
+    try {
+        const raw = await apiGet(`/operation/purchases/invoicesPurch/list?search=${encodeURIComponent(search)}`);
+        const rows = Array.isArray(raw) ? raw : (raw.data || []);
+
+        if (rows.length === 0) {
+            const tr = document.createElement('tr');
+            const td = document.createElement('td');
+            td.colSpan = 9;
+            td.className = 'text-center text-muted py-4';
+            td.textContent = 'لا توجد نتائج مطابقة';
+            tr.appendChild(td);
+            tbody.appendChild(tr);
+            return;
+        }
+
+        rows.forEach((inv, idx) => {
+            const tr = document.createElement('tr');
+            tr.className = 'text-center';
+            tr.style.cursor = 'pointer';
+            tr.title = 'اضغط لتحميل الفاتورة';
+
+            tr.addEventListener('click', () => loadInvoice(inv.purchase_invoice_id));
+
+            tr.addEventListener('mouseenter', () => {
+                tr.classList.add('table-primary');
+            });
+            tr.addEventListener('mouseleave', () => {
+                tr.classList.remove('table-primary');
+            });
+
+            /* الرقم التسلسلي (الأحدث في الأعلى = 1) */
+            const tdSerial = document.createElement('td');
+            tdSerial.textContent = idx + 1;
+            tr.appendChild(tdSerial);
+
+            [
+                inv.invoice_number,
+                inv.invoice_date,
+                inv.supplier_name,
+                inv.coin_name,
+                PAYMENT_METHOD_LABELS[inv.payment_method] || '',
+                formatMoney(inv.total),
+            ].forEach(v => {
+                const td = document.createElement('td');
+                td.textContent = v;
+                tr.appendChild(td);
+            });
+
+            const tdStatus = document.createElement('td');
+            const badge = document.createElement('span');
+            if (inv.is_posted) {
+                badge.className = 'badge bg-success';
+                badge.textContent = 'مرحّلة';
+            } else {
+                badge.className = 'badge bg-secondary';
+                badge.textContent = 'مسودة';
+            }
+            tdStatus.appendChild(badge);
+            tr.appendChild(tdStatus);
+
+            const tdActions = document.createElement('td');
+            tdActions.className = 'text-nowrap';
+            tdActions.addEventListener('click', (e) => e.stopPropagation());
+
+            tdActions.appendChild(buildPostToggleBtn(inv));
+            tdActions.appendChild(buildDeleteBtn(inv));
+            tr.appendChild(tdActions);
+
+            tbody.appendChild(tr);
+        });
+    } catch (e) {
+        console.error(e);
+        notify('فشل البحث عن الفواتير', 'danger');
+    }
+}
+
+/* =========================================================
+   أزرار الإجراءات
+   ========================================================= */
+
+function buildPostToggleBtn(inv) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn btn-sm me-1';
+
+    if (inv.is_posted) {
+        btn.classList.add('btn-outline-warning');
+        btn.innerHTML = '<i class="bi bi-arrow-counterclockwise"></i> إلغاء الترحيل';
+        btn.title = 'فتح الفاتورة للتعديل';
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            unpostInvoice(inv.purchase_invoice_id);
+        });
+    } else {
+        btn.classList.add('btn-outline-success');
+        btn.innerHTML = '<i class="bi bi-check2-circle"></i> ترحيل';
+        btn.title = 'ترحيل الفاتورة وإنشاء القيود';
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            postInvoice(inv.purchase_invoice_id);
+        });
+    }
+
+    return btn;
+}
+
+function buildDeleteBtn(inv) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn btn-sm btn-outline-danger';
+    btn.innerHTML = '<i class="bi bi-trash"></i> حذف';
+    btn.title = 'حذف الفاتورة نهائيًا';
+    btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        deleteInvoice(inv.purchase_invoice_id, inv.invoice_number);
+    });
+    return btn;
+}
+
+/* =========================================================
+   POST / UNPOST / DELETE (من نافذة البحث)
+   ========================================================= */
+
+/** ✅ تأكيد موحّد عبر appConfirm (shared/app-confirm.js) */
+function purchaseConfirm(message, opts = {}) {
+    if (typeof window.appConfirm === 'function') {
+        return window.appConfirm(message, opts);
+    }
+    return Promise.resolve(window.confirm(message));
+}
+
+async function postInvoice(id) {
+    const ok = await purchaseConfirm('هل تريد ترحيل هذه الفاتورة؟\nسيتم إنشاء القيود وحركة المخزون.', {
+        title: 'ترحيل فاتورة الشراء',
+        okText: 'ترحيل',
+    });
+    if (!ok) return;
+
+    try {
+        const r = await apiSend(
+            `/operation/purchases/invoicesPurch/${id}/post`,
+            'POST',
+            {}
+        );
+        notify(r.message || 'تم ترحيل الفاتورة بنجاح', 'success');
+        performInvoiceSearch();
+    } catch (e) {
+        notify(e.message, 'danger');
+    }
+}
+
+async function unpostInvoice(id) {
+    const ok = await purchaseConfirm('هل تريد إلغاء ترحيل هذه الفاتورة؟\nسيتم حذف القيود وحركة المخزون.', {
+        title: 'إلغاء ترحيل فاتورة الشراء',
+        okText: 'إلغاء الترحيل',
+        danger: true,
+    });
+    if (!ok) return;
+
+    try {
+        const r = await apiSend(
+            `/operation/purchases/invoicesPurch/${id}/unpost`,
+            'POST',
+            {}
+        );
+        notify(r.message || 'تم إلغاء ترحيل الفاتورة بنجاح', 'success');
+        performInvoiceSearch();
+
+        if (currentInvoiceId === id) {
+            await loadInvoice(id);
+        }
+    } catch (e) {
+        notify(e.message, 'danger');
+    }
+}
+
+async function deleteInvoice(id, number) {
+    const label = number ? `رقم ${number}` : `#${id}`;
+    const ok = await purchaseConfirm(`هل أنت متأكد من حذف الفاتورة ${label}؟\nلا يمكن التراجع عن هذه العملية.`, {
+        title: 'حذف فاتورة الشراء',
+        okText: 'حذف',
+        danger: true,
+    });
+    if (!ok) return;
+
+    try {
+        const r = await apiSend(
+            `/operation/purchases/invoicesPurch/${id}`,
+            'DELETE',
+            {}
+        );
+        notify(r.message || 'تم حذف الفاتورة بنجاح', 'success');
+        performInvoiceSearch();
+
+        if (currentInvoiceId === id) {
+            clearInvoiceForm();
+        }
+    } catch (e) {
+        notify(e.message, 'danger');
+    }
+}
+
+/* =========================================================
+   POST / UNPOST من النموذج
+   ========================================================= */
+
+async function postCurrentInvoice() {
+    if (!currentInvoiceId) {
+        notify('لا توجد فاتورة للترحيل', 'warning');
+        return;
+    }
+
+    const ok = await purchaseConfirm('هل تريد ترحيل هذه الفاتورة؟\nسيتم إنشاء القيود وحركة المخزون.', {
+        title: 'ترحيل فاتورة الشراء',
+        okText: 'ترحيل',
+    });
+    if (!ok) return;
+
+    try {
+        const r = await apiSend(
+            `/operation/purchases/invoicesPurch/${currentInvoiceId}/post`,
+            'POST',
+            {}
+        );
+        notify(r.message || 'تم ترحيل الفاتورة بنجاح', 'success');
+        await loadInvoice(currentInvoiceId);
+    } catch (e) {
+        notify(e.message, 'danger');
+    }
+}
+
+async function unpostCurrentInvoice() {
+    if (!currentInvoiceId) {
+        notify('لا توجد فاتورة', 'warning');
+        return;
+    }
+
+    const ok = await purchaseConfirm('هل تريد إلغاء ترحيل هذه الفاتورة؟\nسيتم حذف القيود وحركة المخزون.', {
+        title: 'إلغاء ترحيل فاتورة الشراء',
+        okText: 'إلغاء الترحيل',
+        danger: true,
+    });
+    if (!ok) return;
+
+    try {
+        const r = await apiSend(
+            `/operation/purchases/invoicesPurch/${currentInvoiceId}/unpost`,
+            'POST',
+            {}
+        );
+        notify(r.message || 'تم إلغاء ترحيل الفاتورة بنجاح', 'success');
+        await loadInvoice(currentInvoiceId);
+    } catch (e) {
+        notify(e.message, 'danger');
+    }
+}
+
+/* =========================================================
+   تحميل فاتورة
+   ========================================================= */
+
+async function loadInvoice(id) {
+    try {
+        const res = await apiGet(`/operation/purchases/invoicesPurch/${id}`);
+        const { header: h, details } = extractPayload(res);
+
+        clearInvoiceForm();
+
+        document.getElementById('PurchaseInvoicesON2').value = h.invoice_number ?? '';
+        document.getElementById('PurchaseInvoicesDate2').value = h.invoice_date ?? '';
+        document.getElementById('suplierID').value = h.account_id ?? '';
+        document.getElementById('supplierName').value = h.supplier_name ?? '';
+        document.getElementById('coinsID').value = h.coin_id ?? '';
+        document.getElementById('currencyName').value = h.coin_name ?? '';
+        document.getElementById('currencyCode').value = h.coin_code ?? '';
+
+        const rate = parseFloat(h.exchange_rate) || 1;
+        document.getElementById('PuInExchangeRate2').value = formatRate(rate);
+
+        document.getElementById('warehouseID').value = h.warehouse_id ?? '';
+        document.getElementById('warehouseName').value = h.warehouse_name ?? '';
+        document.getElementById('PuInPaymentMethod2').value =
+            PAYMENT_METHOD_TO_STR[h.payment_method] || '';
+        document.getElementById('paymentAccountId').value = h.payment_account_id ?? '';
+        document.getElementById('paymentAccount').value = h.payment_account_name ?? '';
+        document.getElementById('PuInStatement2').value = h.statement ?? '';
+        document.getElementById('invoiceReference').value = h.reference ?? '';
+
+        const expEl = document.getElementById('PuInExpenses');
+        if (expEl) expEl.value = h.expenses ?? 0;
+
+        document.getElementById('PuInTaxCost').value = h.tax_cost ?? 0;
+        document.getElementById('PuInTransportation').value = h.transportation ?? 0;
+        document.getElementById('PuInOtherCost').value = h.other_cost ?? 0;
+        document.getElementById('otherCostDescription').value = h.other_cost_description ?? '';
+
+        if (Number(h.other_cost) > 0) {
+            document.getElementById('otherCostDescriptionContainer').classList.remove('d-none');
+        }
+
+        paymentMethodChanged();
+
+        const tbody = document.getElementById('purchaseInvoiceDetails');
+        tbody.replaceChildren();
+
+        const tpl = document.getElementById('invoiceRowTemplate');
+
+        details.forEach((d, i) => {
+            const row = tpl.content.firstElementChild.cloneNode(true);
+            const unitSel = row.querySelector('.row-unit');
+
+            if (unitSel && typeof lookupCache !== 'undefined') {
+                const emptyOpt = document.createElement('option');
+                emptyOpt.value = '';
+                emptyOpt.textContent = '— اختر الوحدة —';
+                unitSel.appendChild(emptyOpt);
+
+                (lookupCache.units || []).forEach(u => {
+                    const opt = document.createElement('option');
+                    opt.value = u.UnitID;
+                    opt.textContent = u.UnitName;
+                    unitSel.appendChild(opt);
+                });
+
+                if (d.unit_id !== null && d.unit_id !== undefined && d.unit_id !== '') {
+                    unitSel.value = String(d.unit_id);
+                } else {
+                    unitSel.value = '';
+                }
+            }
+
+            row.querySelector('.row-num').textContent = i + 1;
+
+            const itemInput = row.querySelector('.row-item');
+            itemInput.value = d.item_name ?? '';
+            itemInput.dataset.itemId = d.item_id ?? '';
+
+            const typeInput = row.querySelector('.row-type');
+            typeInput.value = d.type_name ?? '';
+            typeInput.dataset.typeId = d.type_id ?? '';
+
+            row.querySelector('.row-code').value = d.code ?? '';
+            row.querySelector('.row-weight').value = d.quantity;
+            row.querySelector('.row-price').value = d.price;
+            row.querySelector('.row-discount').value = d.discount;
+            row.querySelector('.row-total').value = Number(d.total).toFixed(2);
+
+            tbody.appendChild(row);
+        });
+
+        if (!details.length) setEmptyDetailsMessage();
+
+        calculateTotals();
+
+        const modalEl = document.getElementById('invoiceSearchModal');
+        if (modalEl) {
+            const instance = bootstrap.Modal.getInstance(modalEl);
+            if (instance) instance.hide();
+        }
+
+        setTimeout(cleanupStuckModals, 300);
+
+        currentInvoiceId = h.purchase_invoice_id;
+        currentInvoiceIsPosted = !!h.is_posted;
+        currentInvoiceHasReturns = !!h.has_returns;
+        setInvoiceMode('view');
+        applyExchangeRateState();
+        protectExchangeRateInput();
+        editSnapshot = null;
+
+        notify('تم تحميل الفاتورة بنجاح', 'success');
+    } catch (e) {
+        console.error('loadInvoice error:', e);
+        notify('فشل تحميل الفاتورة: ' + e.message, 'danger');
+    }
+}
+
+function takeSnapshot() {
+    const data = {
+        invoice_date: document.getElementById('PurchaseInvoicesDate2')?.value || '',
+        account_id: document.getElementById('suplierID')?.value || '',
+        coin_id: document.getElementById('coinsID')?.value || '',
+        exchange_rate: document.getElementById('PuInExchangeRate2')?.value || '',
+        warehouse_id: document.getElementById('warehouseID')?.value || '',
+        payment_method: document.getElementById('PuInPaymentMethod2')?.value || '',
+        payment_account_id: document.getElementById('paymentAccountId')?.value || '',
+        statement: document.getElementById('PuInStatement2')?.value || '',
+        reference: document.getElementById('invoiceReference')?.value || '',
+        expenses: document.getElementById('PuInExpenses')?.value || '',
+        tax_cost: document.getElementById('PuInTaxCost')?.value || '',
+        transportation: document.getElementById('PuInTransportation')?.value || '',
+        other_cost: document.getElementById('PuInOtherCost')?.value || '',
+        other_cost_desc: document.getElementById('otherCostDescription')?.value || '',
+        details: Array.from(
+            document.querySelectorAll('#purchaseInvoiceDetails .purchase-detail-row')
+        ).map(r => ({
+            item: r.querySelector('.row-item')?.dataset.itemId || '',
+            type: r.querySelector('.row-type')?.dataset.typeId || '',
+            code: r.querySelector('.row-code')?.value || '',
+            unit: r.querySelector('.row-unit')?.value || '',
+            qty: r.querySelector('.row-weight')?.value || '',
+            price: r.querySelector('.row-price')?.value || '',
+            discount: r.querySelector('.row-discount')?.value || '',
+        })),
+    };
+    return JSON.stringify(data);
+}
+
+function hasInvoiceData() {
+    const el = document.getElementById('PurchaseInvoicesON2');
+    return el ? el.value.trim() !== '' : false;
+}
+
+/* =========================================================
+   ✅ حارس التنقّل (shared/navigation-guard.js)
+   يعتمد على أدوات موجودة في هذا الملف:
+   - invoiceMode (س31) + editSnapshot (س36) + takeSnapshot (س1142)
+   - أثناء الحفظ غير المتزامن (isSavingInvoice س35) لا تحذير
+   ========================================================= */
+window.NavigationGuard?.register(() => {
+    if (isSavingInvoice) return false;
+
+    // وضع الإضافة: مقارنة مع اللقطة المرجعية المأخوذة فور تهيئة النموذج
+    // (resetInvoice يملأ الرقم والتاريخ وصفاً فارغاً تلقائياً — ليست بيانات مستخدم)
+    if (invoiceMode === 'add' && addSnapshot) {
+        return takeSnapshot() !== addSnapshot;
+    }
+
+    // وضع التعديل: مقارنة اللقطة المأخوذة عند بدء التعديل (بدون إنذار كاذب)
+    if (invoiceMode === 'edit' && editSnapshot) {
+        return takeSnapshot() !== editSnapshot;
+    }
+
+    return false;
+});
+
+function getValue(id) {
+    const el = document.getElementById(id);
+    return el ? (el.value || '') : '';
+}
+
+function setValue(id, value) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.value = value ?? '';
+}
+
+function editInvoice() {
+    if (!hasInvoiceData() || !currentInvoiceId) {
+        notify('لا توجد فاتورة للتعديل', 'warning');
+        return;
+    }
+
+    if (currentInvoiceHasReturns) {
+        notify('لا يمكن تعديل فاتورة لها مرتجعات. احذف المرتجعات أولًا.', 'warning');
+        return;
+    }
+
+    setInvoiceMode('edit');
+
+    document.querySelectorAll('#purchaseInvoiceDetails .purchase-detail-row')
+        .forEach(r => enableRow(r));
+
+    document.querySelectorAll(
+        '#PurchaseInvoicesDate2, #PuInPaymentMethod2, #paymentAccount, #supplierName, ' +
+        '#currencyName, #warehouseName, #PuInStatement2, ' +
+        '#invoiceReference, #PuInTaxCost, #PuInTransportation, ' +
+        '#PuInOtherCost, #otherCostDescription'
+    ).forEach(el => el.disabled = false);
+
+    if (getValue('PuInPaymentMethod2') === 'credit') {
+        setValue('paymentAccountId', '');
+        setValue('paymentAccount', '');
+    }
+
+    paymentMethodChanged();
+    applyExchangeRateState();
+    protectExchangeRateInput();
+    editSnapshot = takeSnapshot();
+}
+
+async function cancelInvoice() {
+    const ok = await purchaseConfirm('هل أنت متأكد من إلغاء العملية؟', {
+        title: 'إلغاء العملية',
+        okText: 'تأكيد الإلغاء',
+        danger: true,
+    });
+    if (!ok) return;
+
+    if (invoiceMode === 'edit' && currentInvoiceId) {
+        await loadInvoice(currentInvoiceId);
+        notify('تم التراجع عن التعديلات', 'info');
+        return;
+    }
+
+    clearInvoiceForm();
+    notify('تم إلغاء العملية', 'info');
+}
+
+async function saveInvoice() {
+    if (isSavingInvoice) return;
+
+    const number = document.getElementById('PurchaseInvoicesON2').value.trim();
+    if (!number) return notify('رقم الفاتورة مطلوب', 'warning');
+
+    const accountId = document.getElementById('suplierID').value;
+    if (!accountId) return notify('يجب اختيار الرعوي', 'warning');
+
+    const coinId = document.getElementById('coinsID').value;
+    if (!coinId) return notify('يجب اختيار العملة', 'warning');
+
+    const wid = document.getElementById('warehouseID').value;
+    if (!wid) return notify('يجب اختيار المخزن', 'warning');
+
+    const methodStr = document.getElementById('PuInPaymentMethod2').value;
+    if (!methodStr) return notify('يجب اختيار طريقة الدفع', 'warning');
+
+    const methodInt = PAYMENT_METHOD_TO_INT[methodStr];
+    if (!methodInt) return notify('طريقة الدفع غير صالحة', 'danger');
+
+    if (methodInt !== 1 && !document.getElementById('paymentAccountId').value) {
+        return notify('يجب اختيار حساب الدفع', 'warning');
+    }
+
+    const rows = document.querySelectorAll('#purchaseInvoiceDetails .purchase-detail-row');
+    if (!rows.length) return notify('أضف صنفًا واحدًا على الأقل', 'warning');
+
+    const details = [];
+    for (const row of rows) {
+        const itemId = row.querySelector('.row-item').dataset.itemId;
+        if (!itemId) return notify('يجب اختيار الصنف في كل الصفوف', 'warning');
+
+        const qty = parseFloat(row.querySelector('.row-weight').value) || 0;
+        if (qty <= 0) return notify('الكمية يجب أن تكون أكبر من صفر', 'warning');
+
+        const price = parseFloat(row.querySelector('.row-price').value) || 0;
+        if (price <= 0) return notify('سعر الوحدة يجب أن يكون أكبر من صفر', 'warning');
+
+        const discount = parseFloat(row.querySelector('.row-discount').value) || 0;
+        if (discount > qty * price) {
+            return notify('الخصم لا يمكن أن يتجاوز قيمة الصف', 'warning');
+        }
+
+        details.push({
+            item_id: Number(itemId),
+            type_id: row.querySelector('.row-type').dataset.typeId
+                ? Number(row.querySelector('.row-type').dataset.typeId) : null,
+            unit_id: row.querySelector('.row-unit').value
+                ? Number(row.querySelector('.row-unit').value) : null,
+            code: row.querySelector('.row-code').value || null,
+            quantity: qty,
+            price: price,
+            discount: discount,
+        });
+    }
+
+    if (invoiceMode === 'edit' && editSnapshot) {
+        if (takeSnapshot() === editSnapshot) {
+            notify('لم يتم إجراء أي تعديل على الفاتورة', 'info');
+            return;
+        }
+    }
+
+    const isSystemCurrency = isInvoiceInSystemCurrency();
+    const exchangeRate = isSystemCurrency
+        ? 1
+        : (parseFloat(document.getElementById('PuInExchangeRate2').value) || 1);
+
+    const payload = {
+        invoice_number: number,
+        invoice_date: document.getElementById('PurchaseInvoicesDate2').value,
+        account_id: Number(accountId),
+        payment_method: methodInt,
+        payment_account_id: document.getElementById('paymentAccountId').value || null,
+        coin_id: Number(coinId),
+        warehouse_id: Number(wid),
+        exchange_rate: exchangeRate,
+        expenses: parseFloat(document.getElementById('PuInExpenses')?.value) || 0,
+        tax_cost: parseFloat(document.getElementById('PuInTaxCost').value) || 0,
+        transportation: parseFloat(document.getElementById('PuInTransportation').value) || 0,
+        other_cost: parseFloat(document.getElementById('PuInOtherCost').value) || 0,
+        other_cost_description: document.getElementById('otherCostDescription').value || null,
+        statement: document.getElementById('PuInStatement2').value || null,
+        reference: document.getElementById('invoiceReference').value || null,
+        details,
+    };
+
+    isSavingInvoice = true;
+    const saveBtn = document.getElementById('btnSaveInvoice');
+    const saveNewBtn = document.getElementById('btnSaveAndNew');
+    if (saveBtn) saveBtn.disabled = true;
+    if (saveNewBtn) saveNewBtn.disabled = true;
+
+    try {
+        let r;
+        if (invoiceMode === 'edit' && currentInvoiceId) {
+            r = await apiSend(`/operation/purchases/invoicesPurch/${currentInvoiceId}`, 'PUT', payload);
+            currentInvoiceIsPosted = false;
+        } else {
+            r = await apiSend('/operation/purchases/invoicesPurch', 'POST', payload);
+            currentInvoiceId = r.purchase_invoice_id;
+            currentInvoiceIsPosted = !!r.is_posted;
+            currentInvoiceHasReturns = false;
+            if (r.invoice_number) {
+                document.getElementById('PurchaseInvoicesON2').value = r.invoice_number;
+            }
+        }
+        notify(r.message || 'تم الحفظ بنجاح', 'success');
+        setInvoiceMode('view');
+        editSnapshot = null;
+    } catch (e) {
+        notify(e.message, 'danger');
+    } finally {
+        isSavingInvoice = false;
+        if (invoiceMode !== 'view') {
+            if (saveBtn) saveBtn.disabled = false;
+            if (saveNewBtn) saveNewBtn.disabled = false;
+        }
+    }
+}
+
+async function saveAndNewInvoice() {
+    await saveInvoice();
+    if (invoiceMode === 'view') await resetInvoice();
+}
+
+function printInvoice() {
+    if (!hasInvoiceData() || !currentInvoiceId) {
+        notify('يجب حفظ الفاتورة أولاً قبل الطباعة', 'warning');
+        return;
+    }
+
+    window.open(
+        `/operation/purchases/invoicesPurch/${currentInvoiceId}/print`,
+        '_blank',
+        'width=900,height=700'
+    );
+}
+
+/* =========================================================
+   تصدير للـ HTML
+   ========================================================= */
+
+/**
+ * تطبيق القيم الافتراضية المباشرة على النموذج
+ */
+async function applyDefaultValues() {
+    try {
+        // جلب القيم الافتراضية من النظام
+        const defaults = await apiGet('/operation/purchases/invoicesPurch/defaults');
+
+        // تنبيهات فقط — لا منع للحفظ (fallback = أول صف مرجعي من الخادم)
+        if (defaults.warnings && defaults.warnings.length) {
+            defaults.warnings.forEach(w => notify(w, 'warning'));
+        }
+
+        /** لا نستبدل ما أدخله المستخدم بالفعل */
+        const keepIfFilled = (id, value) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            if (el.value !== '' && el.value !== null) return; // مدخل المستخدم مُحفوظ
+            if (value !== null && value !== undefined) el.value = value;
+        };
+
+        // تاريخ الفاتورة (التاريخ الحالي)
+        const dateEl = document.getElementById('PurchaseInvoicesDate2');
+        if (dateEl && !dateEl.value) {
+            dateEl.value = defaults.invoice_date || new Date().toISOString().split('T')[0];
+        }
+
+        // طريقة الدفع (رقم موحّد من الخادم → نص الواجهة)
+        const paymentMethodEl = document.getElementById('PuInPaymentMethod2');
+        let needDefaultBox = false;
+        if (paymentMethodEl && !paymentMethodEl.value) {
+            paymentMethodEl.value = PAYMENT_METHOD_TO_STR[defaults.payment_method] || 'cash';
+            needDefaultBox = paymentMethodEl.value === 'cash';
+            paymentMethodChanged();
+        } else {
+            needDefaultBox = paymentMethodEl?.value === 'cash';
+        }
+
+        // العملة (عملة النظام أو أول عملة نشطة — من الخادم)
+        keepIfFilled('currencyName', defaults.currency_name);
+        keepIfFilled('currencyCode', defaults.currency_code);
+        keepIfFilled('coinsID', defaults.coin_id != null ? String(defaults.coin_id) : null);
+
+        // المخزن الافتراضي
+        keepIfFilled('warehouseName', defaults.warehouse_name);
+        keepIfFilled('warehouseID', defaults.warehouse_id != null ? String(defaults.warehouse_id) : null);
+
+        // ✅ الصندوق الرئيسي الافتراضي عند طريقة الدفع "نقدي"
+        if (needDefaultBox && defaults.default_box_account_id) {
+            keepIfFilled('paymentAccountId', String(defaults.default_box_account_id));
+            keepIfFilled('paymentAccount', defaults.default_box_name);
+        }
+
+        // سعر الصرف
+        keepIfFilled('PuInExchangeRate2', defaults.exchange_rate ? String(defaults.exchange_rate) : null);
+
+        // إعادة حساب الإجماليات بعد تطبيق القيم الافتراضية
+        calculateTotals();
+    } catch (error) {
+        console.error('Error loading default values:', error);
+        // فشل الشبكة/الصلاحيات → تنبيه فقط، والمستخدم يُكمل يدويًا
+        notify('تعذّر جلب القيم الافتراضية من النظام — أكمل البيانات يدويًا', 'warning');
+    }
+}
+
+Object.assign(window, {
+    resetInvoice,
+    searchInvoice,
+    performInvoiceSearch,
+    debouncedInvoiceSearch,
+    clearInvoiceSearch,
+    saveInvoice,
+    saveAndNewInvoice,
+    editInvoice,
+    cancelInvoice,
+    printInvoice,
+    loadInvoice,
+    addInvoiceRow,
+    removeRow,
+    calculateRow,
+    calculateTotals,
+    renumberRows,
+    exchangeRateChanged,
+    paymentMethodChanged,
+    otherCostChanged,
+    hidePaymentAccounts,
+    applyExchangeRateState,
+    protectExchangeRateInput,
+    setInvoiceMode,
+    clearInvoiceForm,
+    applyDefaultValues,
+
+    postInvoice,
+    unpostInvoice,
+    deleteInvoice,
+    postCurrentInvoice,
+    unpostCurrentInvoice,
+    updatePostingButtons,
+    updateSearchButton,
+    cleanupStuckModals,
+});
