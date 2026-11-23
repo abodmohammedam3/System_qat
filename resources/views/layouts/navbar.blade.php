@@ -50,7 +50,7 @@
                     @if(auth()->user()?->isAdmin())
                         <li>
                             <a class="dropdown-item" href="{{ url('/settings/users') }}">
-                                <i class="bi bi-people me-1"></i> إدارة المستخدمين
+                                <i class="bi bi-people me-1"></i> إدارة المستخدمين والأدوار
                             </a>
                         </li>
                     @endif

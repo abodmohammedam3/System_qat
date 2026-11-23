@@ -122,55 +122,69 @@
                     >
                         <div class="border-end border-secondary me-3 pe-2">
 
-                            {{-- العملات --}}
-                            <a
-                                href="{{ route('coins.index') }}"
-                                class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2
-                                {{ request()->routeIs('coins.*') ? 'bg-success text-white' : 'text-white-50' }}"
-                            >
-                                <i class="bi bi-diagram-3"></i>
-                                <span>العملات</span>
-                            </a>
+                            {{-- ملاحظة: $hiddenScreenKeys تأتي من View Composer في AppServiceProvider —
+     الشاشات المفعّل عليها "إخفاء" لدور المستخدم تُحجب هنا، والمنع الخلفي
+     في الميدلوير EnsureScreenAccess يحجب المسار نفسه بـ 403. --}}
 
-                            {{-- الصناديق --}}
-                            <a
-                                href="{{ route('boxes.index') }}"
-                                class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2
-                                {{ request()->routeIs('boxes.*') ? 'bg-success text-white' : 'text-white-50' }}"
-                            >
-                                <i class="bi bi-diagram-3"></i>
-                                <span>الصناديق</span>
-                            </a>
+{{-- العملات --}}
+@if(! in_array('coins', $hiddenScreenKeys ?? [], true))
+<a
+    href="{{ route('coins.index') }}"
+    class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2
+    {{ request()->routeIs('coins.*') ? 'bg-success text-white' : 'text-white-50' }}"
+>
+    <i class="bi bi-diagram-3"></i>
+    <span>العملات</span>
+</a>
+@endif
 
-                            {{-- البنوك --}}
-                            <a
-                                href="{{ route('banks.index') }}"
-                                class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2
-                                {{ request()->routeIs('banks.*') ? 'bg-success text-white' : 'text-white-50' }}"
-                            >
-                                <i class="bi bi-diagram-3"></i>
-                                <span>البنوك</span>
-                            </a>
+{{-- الصناديق --}}
+@if(! in_array('boxes', $hiddenScreenKeys ?? [], true))
+<a
+    href="{{ route('boxes.index') }}"
+    class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2
+    {{ request()->routeIs('boxes.*') ? 'bg-success text-white' : 'text-white-50' }}"
+>
+    <i class="bi bi-diagram-3"></i>
+    <span>الصناديق</span>
+</a>
+@endif
 
-                            {{-- دليل الحسابات --}}
-                            <a
-                                href="{{ route('chartOfAccounts.index') }}"
-                                class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2
-                                {{ request()->routeIs('chartOfAccounts.*') ? 'bg-success text-white' : 'text-white-50' }}"
-                            >
-                                <i class="bi bi-diagram-3"></i>
-                                <span>دليل الحسابات</span>
-                            </a>
+{{-- البنوك --}}
+@if(! in_array('banks', $hiddenScreenKeys ?? [], true))
+<a
+    href="{{ route('banks.index') }}"
+    class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2
+    {{ request()->routeIs('banks.*') ? 'bg-success text-white' : 'text-white-50' }}"
+>
+    <i class="bi bi-diagram-3"></i>
+    <span>البنوك</span>
+</a>
+@endif
 
-                            {{-- الأرصدة الافتتاحية --}}
-                            <a
-                                href="{{ route('openingBalances.index') }}"
-                                class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2
-                                {{ request()->routeIs('openingBalances.*') ? 'bg-success text-white' : 'text-white-50' }}"
-                            >
-                                <i class="bi bi-journal-check"></i>
-                                <span>الأرصدة الافتتاحية</span>
-                            </a>
+{{-- دليل الحسابات --}}
+@if(! in_array('chartOfAccounts', $hiddenScreenKeys ?? [], true))
+<a
+    href="{{ route('chartOfAccounts.index') }}"
+    class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2
+    {{ request()->routeIs('chartOfAccounts.*') ? 'bg-success text-white' : 'text-white-50' }}"
+>
+    <i class="bi bi-diagram-3"></i>
+    <span>دليل الحسابات</span>
+</a>
+@endif
+
+{{-- الأرصدة الافتتاحية --}}
+@if(! in_array('openingBalances', $hiddenScreenKeys ?? [], true))
+<a
+    href="{{ route('openingBalances.index') }}"
+    class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2
+    {{ request()->routeIs('openingBalances.*') ? 'bg-success text-white' : 'text-white-50' }}"
+>
+    <i class="bi bi-journal-check"></i>
+    <span>الأرصدة الافتتاحية</span>
+</a>
+@endif
 
                         </div>
                     </div>
@@ -205,14 +219,16 @@
                     >
                         <div class="border-end border-secondary me-3 pe-2">
 
-                            <a
-                                href="{{ route('suppliers.index') }}"
-                                class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2
-                                {{ request()->routeIs('suppliers.*') ? 'bg-success text-white' : 'text-white-50' }}"
-                            >
-                                <i class="bi bi-people"></i>
-                                <span>الرعية</span>
-                            </a>
+                            @if(! in_array('suppliers', $hiddenScreenKeys ?? [], true))
+<a
+    href="{{ route('suppliers.index') }}"
+    class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2
+    {{ request()->routeIs('suppliers.*') ? 'bg-success text-white' : 'text-white-50' }}"
+>
+    <i class="bi bi-people"></i>
+    <span>الرعية</span>
+</a>
+@endif
 
                         </div>
                     </div>
@@ -247,14 +263,16 @@
                     >
                         <div class="border-end border-secondary me-3 pe-2">
 
-                            <a
-                                href="{{ route('customers.index') }}"
-                                class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2
-                                {{ request()->routeIs('customers.*') ? 'bg-success text-white' : 'text-white-50' }}"
-                            >
-                                <i class="bi bi-people"></i>
-                                <span>العملاء</span>
-                            </a>
+                            @if(! in_array('customers', $hiddenScreenKeys ?? [], true))
+<a
+    href="{{ route('customers.index') }}"
+    class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2
+    {{ request()->routeIs('customers.*') ? 'bg-success text-white' : 'text-white-50' }}"
+>
+    <i class="bi bi-people"></i>
+    <span>العملاء</span>
+</a>
+@endif
 
                         </div>
                     </div>
@@ -292,45 +310,52 @@
                     >
                         <div class="border-end border-secondary me-3 pe-2">
 
-                            {{-- الأصناف --}}
-                            <a
-                                href="{{ route('items.index') }}"
-                                class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2
-                                {{ request()->routeIs('items.*') ? 'bg-success text-white' : 'text-white-50' }}"
-                            >
-                                <i class="bi bi-box"></i>
-                                <span>الأصناف</span>
-                            </a>
+                            @if(! in_array('items', $hiddenScreenKeys ?? [], true))
+<a
+    href="{{ route('items.index') }}"
+    class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2
+    {{ request()->routeIs('items.*') ? 'bg-success text-white' : 'text-white-50' }}"
+>
+    <i class="bi bi-box"></i>
+    <span>الأصناف</span>
+</a>
+@endif
 
-                            {{-- الأنواع --}}
-                            <a
-                                href="{{ route('types.index') }}"
-                                class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2
-                                {{ request()->routeIs('types.*') ? 'bg-success text-white' : 'text-white-50' }}"
-                            >
-                                <i class="bi bi-upc-scan"></i>
-                                <span>الانواع</span>
-                            </a>
+{{-- الأنواع --}}
+@if(! in_array('types', $hiddenScreenKeys ?? [], true))
+<a
+    href="{{ route('types.index') }}"
+    class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2
+    {{ request()->routeIs('types.*') ? 'bg-success text-white' : 'text-white-50' }}"
+>
+    <i class="bi bi-upc-scan"></i>
+    <span>الانواع</span>
+</a>
+@endif
 
-                            {{-- الوحدات --}}
-                            <a
-                                href="{{ route('units.index') }}"
-                                class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2
-                                {{ request()->routeIs('units.*') ? 'bg-success text-white' : 'text-white-50' }}"
-                            >
-                                <i class="bi bi-rulers"></i>
-                                <span>الوحدات</span>
-                            </a>
+{{-- الوحدات --}}
+@if(! in_array('units', $hiddenScreenKeys ?? [], true))
+<a
+    href="{{ route('units.index') }}"
+    class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2
+    {{ request()->routeIs('units.*') ? 'bg-success text-white' : 'text-white-50' }}"
+>
+    <i class="bi bi-rulers"></i>
+    <span>الوحدات</span>
+</a>
+@endif
 
                             {{-- المخازن --}}
-                            <a
-                                href="{{ route('warehouses.index') }}"
-                                class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2
-                                {{ request()->routeIs('warehouses.*') ? 'bg-success text-white' : 'text-white-50' }}"
-                            >
-                                <i class="bi bi-rulers"></i>
-                                <span>المخازن</span>
-                            </a>
+@if(! in_array('warehouses', $hiddenScreenKeys ?? [], true))
+<a
+    href="{{ route('warehouses.index') }}"
+    class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2
+    {{ request()->routeIs('warehouses.*') ? 'bg-success text-white' : 'text-white-50' }}"
+>
+    <i class="bi bi-rulers"></i>
+    <span>المخازن</span>
+</a>
+@endif
 
                         </div>
                     </div>
@@ -406,31 +431,38 @@
                     >
                         <div class="border-end border-secondary me-3 pe-2">
 
-                            <a
-                                href="{{ route('invoicesPurch.index') }}"
-                                class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2
-                                {{ request()->routeIs('invoicesPurch.*') ? 'bg-success text-white' : 'text-white-50' }}"
-                            >
-                                <i class="bi bi-receipt"></i>
-                                <span>فواتير الشراء</span>
-                            </a>
+                            @if(! in_array('purchase_invoices', $hiddenScreenKeys ?? [], true))
+<a
+    href="{{ route('invoicesPurch.index') }}"
+    class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2
+    {{ request()->routeIs('invoicesPurch.*') ? 'bg-success text-white' : 'text-white-50' }}"
+>
+    <i class="bi bi-receipt"></i>
+    <span>فواتير الشراء</span>
+</a>
+@endif
 
-                            <a
-                                href="{{ route('purchases.returns.index') }}"
-                                class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2
-                                {{ request()->routeIs('purchases.returns.*') ? 'bg-success text-white' : 'text-white-50' }}"
-                            >
-                                <i class="bi bi-arrow-return-right"></i>
-                                <span>مردود المشتريات</span>
-                            </a>
-                            <a
-                                href="{{ route('purchases.distribution.index') }}"
-                                class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2
-                                {{ request()->routeIs('purchases.distribution.*') ? 'bg-success text-white' : 'text-white-50' }}"
-                            >
-                                <i class="bi bi-boxes"></i>
-                                <span>توزيع أصناف المشتريات</span>
-                            </a>
+@if(! in_array('purchase_returns', $hiddenScreenKeys ?? [], true))
+<a
+    href="{{ route('purchases.returns.index') }}"
+    class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2
+    {{ request()->routeIs('purchases.returns.*') ? 'bg-success text-white' : 'text-white-50' }}"
+>
+    <i class="bi bi-arrow-return-right"></i>
+    <span>مردود المشتريات</span>
+</a>
+@endif
+
+@if(! in_array('purchase_distribution', $hiddenScreenKeys ?? [], true))
+<a
+    href="{{ route('purchases.distribution.index') }}"
+    class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2
+    {{ request()->routeIs('purchases.distribution.*') ? 'bg-success text-white' : 'text-white-50' }}"
+>
+    <i class="bi bi-boxes"></i>
+    <span>توزيع أصناف المشتريات</span>
+</a>
+@endif
 
                         </div>
                     </div>
@@ -465,23 +497,27 @@
                     >
                         <div class="border-end border-secondary me-3 pe-2">
 
-                            <a
-                                href="{{ route('sales.invoices.index') }}"
-                                class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2
-                                {{ request()->routeIs('sales.invoices.*') ? 'bg-success text-white' : 'text-white-50' }}"
-                            >
-                                <i class="bi bi-receipt-cutoff"></i>
-                                <span>فواتير البيع</span>
-                            </a>
+                            @if(! in_array('sales_invoices', $hiddenScreenKeys ?? [], true))
+<a
+    href="{{ route('sales.invoices.index') }}"
+    class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2
+    {{ request()->routeIs('sales.invoices.*') ? 'bg-success text-white' : 'text-white-50' }}"
+>
+    <i class="bi bi-receipt-cutoff"></i>
+    <span>فواتير البيع</span>
+</a>
+@endif
 
-                            <a
-                                href="{{ route('sales.returns.index') }}"
-                                class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2
-                                {{ request()->routeIs('sales.returns.*') ? 'bg-success text-white' : 'text-white-50' }}"
-                            >
-                                <i class="bi bi-arrow-return-left"></i>
-                                <span>مردود المبيعات</span>
-                            </a>
+@if(! in_array('sales_returns', $hiddenScreenKeys ?? [], true))
+<a
+    href="{{ route('sales.returns.index') }}"
+    class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2
+    {{ request()->routeIs('sales.returns.*') ? 'bg-success text-white' : 'text-white-50' }}"
+>
+    <i class="bi bi-arrow-return-left"></i>
+    <span>مردود المبيعات</span>
+</a>
+@endif
 
                         </div>
                     </div>
@@ -519,34 +555,40 @@
                         <div class="border-end border-secondary me-3 pe-2">
 
                             {{-- قيود اليومية --}}
-                            <a
-                                href="{{ route('journalEntries.index') }}"
-                                class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2
-                                {{ request()->routeIs('journalEntries.*') ? 'bg-success text-white' : 'text-white-50' }}"
-                            >
-                                <i class="bi bi-journal-text"></i>
-                                <span>قيود اليومية</span>
-                            </a>
+@if(! in_array('journalEntries', $hiddenScreenKeys ?? [], true))
+<a
+    href="{{ route('journalEntries.index') }}"
+    class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2
+    {{ request()->routeIs('journalEntries.*') ? 'bg-success text-white' : 'text-white-50' }}"
+>
+    <i class="bi bi-journal-text"></i>
+    <span>قيود اليومية</span>
+</a>
+@endif
 
-                            {{-- سند صرف --}}
-                            <a
-                                href="{{ route('paymentVouchers.index') }}"
-                                class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2
-                                {{ request()->routeIs('paymentVouchers.*') ? 'bg-success text-white' : 'text-white-50' }}"
-                            >
-                                <i class="bi bi-cash"></i>
-                                <span>سند صرف</span>
-                            </a>
+{{-- سند صرف --}}
+@if(! in_array('payment_vouchers', $hiddenScreenKeys ?? [], true))
+<a
+    href="{{ route('paymentVouchers.index') }}"
+    class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2
+    {{ request()->routeIs('paymentVouchers.*') ? 'bg-success text-white' : 'text-white-50' }}"
+>
+    <i class="bi bi-cash"></i>
+    <span>سند صرف</span>
+</a>
+@endif
 
-                            {{-- سند قبض --}}
-                            <a
-                                href="{{ route('receiptVouchers.index') }}"
-                                class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2
-                                {{ request()->routeIs('receiptVouchers.*') ? 'bg-success text-white' : 'text-white-50' }}"
-                            >
-                                <i class="bi bi-cash-stack"></i>
-                                <span>سند قبض</span>
-                            </a>
+{{-- سند قبض --}}
+@if(! in_array('receipt_vouchers', $hiddenScreenKeys ?? [], true))
+<a
+    href="{{ route('receiptVouchers.index') }}"
+    class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2
+    {{ request()->routeIs('receiptVouchers.*') ? 'bg-success text-white' : 'text-white-50' }}"
+>
+    <i class="bi bi-cash-stack"></i>
+    <span>سند قبض</span>
+</a>
+@endif
 
                         </div>
                     </div>
@@ -554,6 +596,7 @@
                     {{-- ================================================= --}}
                     {{-- حركة المخزون --}}
                     {{-- ================================================= --}}
+                    @if(! in_array('movements', $hiddenScreenKeys ?? [], true))
                     <a
                         href="{{ route('movements.index') }}"
                         class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2
@@ -564,38 +607,29 @@
                         <i class="bi bi-boxes"></i>
                         <span>حركة المخزون</span>
                     </a>
+                    @endif
 
                 {{-- ================================================= --}}
                 {{-- مركز التقارير --}}
                 {{-- ================================================= --}}
+                @if(! in_array('reports', $hiddenScreenKeys ?? [], true))
                 <a href="{{ route('reports.index') }}"
                    class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2 mt-1
                    {{ request()->routeIs('reports.*') ? 'bg-success text-white' : 'text-white-50' }}">
                     <i class="bi bi-bar-chart-line"></i>
                     <span>مركز التقارير</span>
                 </a>
+                @endif
 
-                {{-- إعدادات النظام --}}
+                {{-- إعدادات النظام — تضمّن الآن تاب المستخدمين والأدوار --}}
                 <a href="{{ url('/settings/system') }}"
                    class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2 mt-1
-                   {{ request()->is('settings/system*') ? 'bg-success text-white' : 'text-white-50' }}">
+                   {{ request()->is('settings/system*') || request()->is('settings/users*') ? 'bg-success text-white' : 'text-white-50' }}">
                     <i class="bi bi-gear-wide-connected"></i>
                     <span>إعدادات النظام</span>
                 </a>
 
-                    {{-- ================================================= --}}
-                    {{-- إدارة المستخدمين — للمدير فقط (الفحص F-01) --}}
-                    {{-- ================================================= --}}
-                    @if(auth()->user()?->isAdmin())
-                        <a
-                            href="{{ url('/settings/users') }}"
-                            class="d-flex align-items-center gap-3 text-decoration-none rounded-2 px-3 py-2 mb-1
-                            {{ request()->routeIs('users.*') ? 'bg-success text-white' : 'text-white' }}"
-                        >
-                            <i class="bi bi-people fs-6"></i>
-                            <span>المستخدمون</span>
-                        </a>
-                    @endif
+                {{-- تم نقل رابط "المستخدمون" إلى شاشة إعدادات النظام → تاب "المستخدمون والأدوار" --}}
 
                 </div>
             </div>

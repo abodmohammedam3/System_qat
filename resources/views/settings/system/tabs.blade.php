@@ -12,6 +12,17 @@
     </li>
 
     <li class="nav-item" role="presentation">
+        <button class="nav-link {{ ($activeTab ?? 'backup') === 'users' ? 'active' : '' }}"
+                type="button"
+                data-bs-toggle="tab"
+                data-bs-target="#tab-users"
+                role="tab">
+            <i class="bi bi-people"></i>
+            المستخدمون والأدوار
+        </button>
+    </li>
+
+    <li class="nav-item" role="presentation">
         <button class="nav-link disabled"
                 type="button"
                 role="tab">

@@ -35,6 +35,7 @@ use App\Observers\CoinObserver;
 use App\Listeners\RecordSystemActivity;
 use App\Listeners\FlushDashboardCache;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\View;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -45,6 +46,21 @@ class AppServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        // مشاركة الشاشات المخفية عن دور المستخدم مع كل العروض —
+        // يستخدمها السايدبار لإخفاء الروابط (المنع الخلفي في الميدلوير).
+        View::composer('layouts.*', function ($view) {
+            $user = auth()->user();
+            $hidden = [];
+
+            if ($user && ! $user->isAdmin() && $user->role_id) {
+                $hidden = $user->roleRecord->screens()
+                    ->wherePivot('hidden', true)
+                    ->pluck('screens.key')
+                    ->all();
+            }
+
+            $view->with('hiddenScreenKeys', $hidden);
+        });
         // ═══════════════════════════════════════════════════════
         // المصادقة والصلاحيات (الفحص F-01)
         // -----------------------------------------------------------------
@@ -65,7 +81,7 @@ class AppServiceProvider extends ServiceProvider
         // صلاحيات إدارية — للمدير فقط (يتحقق قبل Gate::before)
         Gate::define('manage-users', fn (User $user) => $user->isAdmin());
         Gate::define('manage-backup', fn (User $user) => $user->isAdmin());
-        Gate::define('manage-settings', fn (User $user) => $user->isAdmin() || $user->role === User::ROLE_ACCOUNTANT);
+        Gate::define('manage-settings', fn (User $user) => $user->isAdmin() || ($user->roleRecord?->slug ?? $user->role) === User::ROLE_ACCOUNTANT);
 
         // صلاحيات الموديولات من خريطة config/permissions.php
         $modulePermissions = collect(config('permissions', []))
@@ -78,6 +94,30 @@ class AppServiceProvider extends ServiceProvider
             Gate::define($permission, function (User $user) use ($permission) {
                 if (! config('permissions.enabled', true)) {
                     return true; // التعطيل اليدوي للتشخيص فقط
+                }
+
+                // المستوى الثاني: إن كان للدور حالة على شاشة الموديول، فهي
+                // المصدر (وصولاً ديناميكياً من المصفوفة) — وإلا fallback للخريطة.
+                [$module, $action] = array_pad(explode('.', $permission, 2), 2, null);
+
+                // الترحيل/إلغاؤه صلاحية موروثة من "تعديل" (طلب المستخدم:
+                // لا تظهر في المصفوفة لكنها تعمل في الخلفية).
+                if (in_array($action, ['post', 'unpost'], true)) {
+                    $action = 'update';
+                }
+
+                if ($user->role_id && $user->roleRecord) {
+                    $pivot = $user->roleRecord->screens()
+                        ->where('screens.key', $module)
+                        ->first()?->pivot;
+
+                    if ($pivot) {
+                        $field = $action === 'view' ? 'view' : $action;
+
+                        if (in_array($field, ['view', 'create', 'update', 'delete', 'print'], true)) {
+                            return (bool) $pivot->{$field};
+                        }
+                    }
                 }
 
                 return in_array('*', $user->rolePermissions(), true)

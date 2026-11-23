@@ -18,6 +18,18 @@ class User extends Authenticatable
     /** @use HasFactory<\Database\Factories\UserFactory> */
     use HasFactory, Notifiable;
 
+    /**
+     * المستوى الثاني — الدور الديناميكي من قاعدة البيانات.
+     * عمود role النصي يبقى fallback عند غياب role_id.
+     */
+    public function roleRecord()
+    {
+        return $this->belongsTo(Role::class, 'role_id');
+    }
+
+    /** ذاكرة صلاحيات الجلسة — تمنع استعلامات متكررة في كل فحص can(). */
+    protected ?array $dynamicPermissionsCache = null;
+
     public const ROLE_ADMIN      = 'admin';
     public const ROLE_ACCOUNTANT = 'accountant';
     public const ROLE_VIEWER     = 'viewer';
@@ -53,12 +65,13 @@ class User extends Authenticatable
 
     public function isAdmin(): bool
     {
-        return $this->role === self::ROLE_ADMIN;
+        // الدور الديناميكي أولاً ثم العمود النصي القديم (توافق خلفي)
+        return ($this->roleRecord?->slug ?? $this->role) === self::ROLE_ADMIN;
     }
 
     public function isViewer(): bool
     {
-        return $this->role === self::ROLE_VIEWER;
+        return ($this->roleRecord?->slug ?? $this->role) === self::ROLE_VIEWER;
     }
 
     /**
@@ -70,6 +83,13 @@ class User extends Authenticatable
     {
         if ($this->isAdmin()) {
             return ['*'];
+        }
+
+        // المستوى الثاني: اقرأ من قاعدة البيانات إن كان الدور مربوطاً —
+        // إن لم يكن (مستخدم قديم قبل الهجرة) يرجع للخريطة الثابتة أدناه.
+        if ($this->role_id && $this->roleRecord) {
+            return $this->dynamicPermissionsCache ??= $this->roleRecord
+                ->permissions()->pluck('slug')->all();
         }
 
         $moduleActions = [

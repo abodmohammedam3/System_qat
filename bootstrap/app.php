@@ -19,6 +19,7 @@ return Application::configure(basePath: dirname(__DIR__))
         // ═══════════════════════════════════════════════════════
         $middleware->web(append: [
             \App\Http\Middleware\EnsureAuthenticated::class,
+            \App\Http\Middleware\EnsureScreenAccess::class,
             \App\Http\Middleware\ReleaseSessionLock::class,
         ]);
 

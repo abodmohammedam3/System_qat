@@ -4,6 +4,9 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Models\Role;
+use App\Models\Permission;
+use App\Models\Screen;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -20,15 +23,13 @@ use Illuminate\Validation\Rule;
 class UserController extends Controller
 {
     /**
-     * الإصلاح: كان هذا الإجراء يعيد JsonResponse فقط، رغم أن المسار
-     * GET /settings/users هو الذي يفتح الشاشة من القائمة الجانبية —
-     * فلا كان أي عرض (view) يُرسل أبداً وكانت الشاشة لا تظهر.
-     * الآن: index يعرض setting/users/index.blade.php، وlist يبقى JSON
-     * يغذي الجدول عبر fetch في resources/js/pages/users.js.
+     * الإصلاح: شاشة المستخدمين أصبحت تاباً داخل شاشة إعدادات النظام
+     * (تم نقلها من القائمة الجانبية بناء على الطلب) — نفس العرض
+     * مع activeTab=users لتفعيل التاب الصحيح.
      */
     public function index(): \Illuminate\View\View
     {
-        return view('setting.users.index');
+        return view('settings.system.index', ['activeTab' => 'users']);
     }
 
     public function list(): JsonResponse
@@ -54,22 +55,27 @@ class UserController extends Controller
             'name'     => ['required', 'string', 'max:100'],
             'email'    => ['required', 'string', 'email', 'max:150', 'unique:users,email'],
             'password' => ['required', 'string', 'min:8'],
-            'role'     => ['required', Rule::in([User::ROLE_ADMIN, User::ROLE_ACCOUNTANT, User::ROLE_VIEWER])],
+            'role'     => ['required', 'string', 'max:100'],
         ], [
-            'name.required'     => 'الاسم مطلوب',
-            'email.required'    => 'البريد الإلكتروني مطلوب',
-            'email.email'       => 'صيغة البريد الإلكتروني غير صحيحة',
-            'email.unique'      => 'البريد الإلكتروني مستخدم بالفعل',
-            'password.required' => 'كلمة المرور مطلوبة',
-            'password.min'      => 'كلمة المرور يجب أن تكون 8 أحرف على الأقل',
-            'role.required'     => 'الدور مطلوب',
+            'role.required' => 'الدور مطلوب',
         ]);
+
+        // الدور الديناميكي: يقبل الاسم المعروض أو الـ slug (توافق خلفي)
+        $role = Role::where('name', $validated['role'])->first()
+            ?? Role::where('slug', $validated['role'])->first();
+
+        if (! $role) {
+            throw ValidationException::withMessages([
+                'role' => 'لا يوجد دور بهذا الاسم — أنشئه أولاً بزر «دور جديد»',
+            ]);
+        }
 
         $user = User::create([
             'name'      => $validated['name'],
             'email'     => $validated['email'],
             'password'  => Hash::make($validated['password']),
-            'role'      => $validated['role'],
+            'role'      => $role->slug,
+            'role_id'   => $role->id, // الربط الديناميكي (المستوى الثاني)
             'is_active' => true,
         ]);
 
@@ -80,18 +86,181 @@ class UserController extends Controller
         ], 201);
     }
 
+    // =========================================================
+    // المستوى الثاني — الشاشات والأدوار (ديناميكي بالكامل)
+    // =========================================================
+
+    /**
+     * بيانات مصفوفة الشاشات: صفوف الشاشات (كل شاشات النظام من
+     * config/screens.php) تحت كل مجموعة، ولكل دور حالته على كل شاشة
+     * (view/create/update/delete/print/hidden) من جدول role_screen.
+     */
+    public function rolesMatrix(): JsonResponse
+    {
+        $roles = Role::query()
+            ->with('screens:id,key')
+            ->orderBy('id')
+            ->get(['id', 'slug', 'name', 'is_system'])
+            ->map(fn (Role $r) => [
+                'id'        => $r->id,
+                'slug'      => $r->slug,
+                'name'      => $r->name,
+                'is_system' => (bool) $r->is_system,
+                'locked'    => $r->slug === 'admin',
+                // خريطة screenKey => حالة pivot
+                'screens'   => $r->screens->mapWithKeys(
+                    fn (Screen $s) => [$s->key => [
+                        'view'   => (bool) $s->pivot->view,
+                        'create' => (bool) $s->pivot->create,
+                        'update' => (bool) $s->pivot->update,
+                        'delete' => (bool) $s->pivot->delete,
+                        'print'  => (bool) $s->pivot->print,
+                        'hidden' => (bool) $s->pivot->hidden,
+                    ]]
+                )->all(),
+            ]);
+
+        // الشاشات مجمّعة حسب group كما تظهر في السايدبار
+        $screens = Screen::query()
+            ->orderBy('sort')
+            ->get(['id', 'key', 'name', 'group', 'locked'])
+            ->groupBy('group')
+            ->map(fn ($items, $group) => [
+                'group'   => $group,
+                'screens' => $items->map(fn (Screen $s) => [
+                    'key'    => $s->key,
+                    'name'   => $s->name,
+                    'locked' => (bool) $s->locked,
+                ]),
+            ])
+            ->values();
+
+        return response()->json([
+            'success' => true,
+            'roles'   => $roles,
+            'groups'  => $screens,
+        ]);
+    }
+
+    /**
+     * حفظ حالة مربع واحد (حفظ تلقائي عند كل نقرة).
+     * حماية: مدير النظام مقفل دائماً، والشاشات المقفلة لا تُخفى.
+     */
+    public function updateRoleScreen(Request $request, Role $role): JsonResponse
+    {
+        if ($role->slug === 'admin') {
+            return response()->json([
+                'success' => false,
+                'message' => 'صلاحيات مدير النظام ثابتة — يملك كل شيء دائماً',
+            ], 422);
+        }
+
+        $validated = $request->validate([
+            'screen' => ['required', 'string', 'exists:screens,key'],
+            'field'  => ['required', Rule::in(['view', 'create', 'update', 'delete', 'print', 'hidden'])],
+            'value'  => ['required', 'boolean'],
+        ]);
+
+        $screen = Screen::where('key', $validated['screen'])->firstOrFail();
+
+        if ($screen->locked && $validated['field'] === 'hidden') {
+            return response()->json([
+                'success' => false,
+                'message' => "الشاشة «{$screen->name}» أساسية ولا يمكن إخفاؤها",
+            ], 422);
+        }
+
+        $role->screens()->syncWithoutDetaching([
+            $screen->id => [$validated['field'] => $validated['value']],
+        ]);
+
+        return response()->json(['success' => true]);
+    }
+
+    // =========================================================
+    // إدارة الأدوار — إنشاء/تعديل/حذف (المستوى الثاني)
+    // =========================================================
+
+    public function storeRole(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'name' => ['required', 'string', 'max:100', 'unique:roles,name'],
+        ], [
+            'name.required' => 'اسم الدور مطلوب',
+            'name.unique'   => 'يوجد دور بهذا الاسم بالفعل',
+        ]);
+
+        $role = Role::create([
+            'name'      => $validated['name'],
+            'slug'      => str($validated['name'])->slug('_')->toString() ?: 'role_'.time(),
+            'is_system' => false,
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => "تم إنشاء الدور «{$role->name}» — فعّل صلاحياته من المصفوفة",
+            'role'    => ['id' => $role->id, 'slug' => $role->slug, 'name' => $role->name],
+        ], 201);
+    }
+
+    public function updateRole(Request $request, Role $role): JsonResponse
+    {
+        if ($role->slug === 'admin') {
+            return response()->json(['success' => false, 'message' => 'لا يمكن تعديل دور مدير النظام'], 422);
+        }
+
+        $validated = $request->validate([
+            'name' => ['required', 'string', 'max:100', Rule::unique('roles', 'name')->ignore($role->id)],
+        ]);
+
+        $role->update(['name' => $validated['name']]);
+
+        return response()->json(['success' => true, 'message' => 'تم تحديث اسم الدور بنجاح']);
+    }
+
+    public function destroyRole(Role $role): JsonResponse
+    {
+        if ($role->is_system || $role->slug === 'admin') {
+            return response()->json([
+                'success' => false,
+                'message' => 'لا يمكن حذف أدوار النظام الثابتة',
+            ], 422);
+        }
+
+        if ($role->users()->exists()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'لا يمكن حذف دور مرتبط بمستخدمين — انقلهم لدور آخر أولاً',
+            ], 422);
+        }
+
+        $role->delete();
+
+        return response()->json(['success' => true, 'message' => 'تم حذف الدور بنجاح']);
+    }
+
     public function update(Request $request, User $user): JsonResponse
     {
         $validated = $request->validate([
             'name'  => ['required', 'string', 'max:100'],
             'email' => ['required', 'string', 'email', 'max:150', Rule::unique('users', 'email')->ignore($user->id)],
-            'role'  => ['required', Rule::in([User::ROLE_ADMIN, User::ROLE_ACCOUNTANT, User::ROLE_VIEWER])],
+            'role'  => ['required', 'string', 'max:100'],
         ]);
+
+        // الدور الديناميكي: يقبل الاسم المعروض أو الـ slug (توافق خلفي)
+        $role = Role::where('name', $validated['role'])->first()
+            ?? Role::where('slug', $validated['role'])->first();
+
+        if (! $role) {
+            throw ValidationException::withMessages([
+                'role' => 'لا يوجد دور بهذا الاسم — أنشئه أولاً بزر «دور جديد»',
+            ]);
+        }
 
         // منع تخفيض آخر مدير في النظام
         if (
             $user->isAdmin()
-            && $validated['role'] !== User::ROLE_ADMIN
+            && $role->slug !== User::ROLE_ADMIN
             && User::where('role', User::ROLE_ADMIN)->where('is_active', true)->where('id', '!=', $user->id)->count() === 0
         ) {
             return response()->json([
@@ -101,9 +270,10 @@ class UserController extends Controller
         }
 
         $user->update([
-            'name'  => $validated['name'],
-            'email' => $validated['email'],
-            'role'  => $validated['role'],
+            'name'    => $validated['name'],
+            'email'   => $validated['email'],
+            'role'    => $role->slug,
+            'role_id' => $role->id,
         ]);
 
         return response()->json([

@@ -47,5 +47,8 @@ class DatabaseSeeder extends Seeder
 
         // دليل الحسابات الكامل (الحسابات النظامية المطلوبة للترحيل)
         $this->call(ChartOfAccountsSeeder::class);
+
+        // الأدوار والصلاحيات الديناميكية (المستوى الثاني)
+        $this->call(RolesPermissionsSeeder::class);
     }
 }

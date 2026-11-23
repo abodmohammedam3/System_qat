@@ -18,8 +18,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const toast = (msg, type = 'info') =>
         (window.showSystemToast || ((m, t) => console.log(`[${t}] ${m}`)))(msg, type);
 
-    const ROLE_LABELS = { admin: 'مدير النظام', accountant: 'محاسب', viewer: 'مشاهد فقط' };
-    const ROLE_BADGES = { admin: 'bg-danger', accountant: 'bg-success', viewer: 'bg-secondary' };
+    const ROLE_LABELS = {};
+    const ROLE_BADGES = {};
 
     const tbody = document.getElementById('usersTbody');
     const userModal = new bootstrap.Modal(document.getElementById('userModal'));
@@ -28,6 +28,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // ذاكرة الصفوف الحالية — تُغني عن تمرير الاسم/البريد داخل onclick (ثغرة قديمة)
     const rowsById = new Map();
+
+    // الأدوار المتاحة — تُجلب من السيرفر وتغذي combobox الدور + المصفوفة
+    let availableRoles = [];
 
     /**
      * تأكيد موحد عبر نظام المشروع الجاهز (app-confirm.js — مودال مشترك
@@ -77,6 +80,88 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    /**
+     * جلب الأدوار الديناميكية من السيرفر وتغذية:
+     *  - قائمة الدور في نموذج المستخدم (combobox ببحث فوري).
+     *  - خرائط ROLE_LABELS / ROLE_BADGES لأسماء الأدوار الديناميكية.
+     */
+    async function loadRoles() {
+        try {
+            const res = await fetch('/settings/users/roles', {
+                headers: { 'X-CSRF-TOKEN': csrfToken, 'Accept': 'application/json' },
+            });
+            if (!res.ok) return;
+            const data = await res.json();
+
+            availableRoles = data.roles || [];
+            availableRoles.forEach((r, i) => {
+                ROLE_LABELS[r.slug] = r.name;
+                ROLE_BADGES[r.slug] = r.slug === 'admin' ? 'bg-danger'
+                    : (i % 2 ? 'bg-success' : 'bg-secondary');
+            });
+
+            refreshRolesDatalist();
+        } catch (_) { /* الأدوار اختيارية للعرض */ }
+    }
+
+    /** تحديث قائمة الاقتراحات تحت حقل الدور */
+    function refreshRolesDatalist() {
+        const dl = document.getElementById('rolesDatalist');
+        if (dl) dl.innerHTML = availableRoles.map((r) => `<option value="${esc(r.name)}">`).join('');
+    }
+
+    // ─── إضافة دور جديد (زر «دور جديد» في نموذج المستخدم) ─────
+    const roleModal = new bootstrap.Modal(document.getElementById('roleModal'));
+    // نمط المودال: create (دور جديد) / rename (تعديل اسم) — يمنع تنفيذ
+    // معالجي الحفظ معاً على نفس الزر.
+    let roleModalMode = 'create';
+
+    window.openRoleModal = function () {
+        roleModalMode = 'create';
+        document.getElementById('roleModalTitle').textContent = 'إضافة دور جديد';
+        document.getElementById('newRoleName').value = '';
+        document.getElementById('roleFormError').classList.add('d-none');
+        roleModal.show();
+    };
+
+    document.getElementById('btnSaveRole').addEventListener('click', async () => {
+        if (roleModalMode !== 'create') return;
+        const errBox = document.getElementById('roleFormError');
+        errBox.classList.add('d-none');
+        const name = document.getElementById('newRoleName').value.trim();
+
+        if (!name) {
+            errBox.textContent = 'اسم الدور مطلوب';
+            errBox.classList.remove('d-none');
+            return;
+        }
+
+        try {
+            const res = await fetch('/settings/users/roles', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': csrfToken, 'Accept': 'application/json' },
+                body: JSON.stringify({ name }),
+            });
+            const data = await res.json();
+
+            if (!res.ok || !data.success) {
+                errBox.textContent = data.message || 'فشل إنشاء الدور';
+                errBox.classList.remove('d-none');
+                return;
+            }
+
+            roleModal.hide();
+            availableRoles.push(data.role);
+            refreshRolesDatalist();
+            document.getElementById('userRole').value = data.role.name;
+            toast(data.message, 'success');
+            if (matrixLoaded) loadRolesMatrix(true);
+        } catch (e) {
+            errBox.textContent = 'خطأ اتصال: ' + e.message;
+            errBox.classList.remove('d-none');
+        }
+    });
+
     // ─── إضافة / تعديل ───────────────────────────────
     window.openUserModal = function () {
         editingUserId = null;
@@ -112,10 +197,23 @@ document.addEventListener('DOMContentLoaded', () => {
         const errBox = document.getElementById('userFormError');
         errBox.classList.add('d-none');
 
+        // الدور الآن نص حر (combobox) — اسم الدور يُرسل كما هو
+        const roleName = document.getElementById('userRole').value.trim();
+        if (!roleName) {
+            errBox.textContent = 'الدور مطلوب — اختر من القائمة أو اكتب اسم دور جديد';
+            errBox.classList.remove('d-none');
+            return;
+        }
+        if (!availableRoles.some((r) => r.name === roleName)) {
+            errBox.textContent = "لا يوجد دور بهذا الاسم — أنشئه أولاً بزر «دور جديد»";
+            errBox.classList.remove('d-none');
+            return;
+        }
+
         const payload = {
             name:  document.getElementById('userName').value.trim(),
             email: document.getElementById('userEmail').value.trim(),
-            role:  document.getElementById('userRole').value,
+            role:  roleName,
         };
 
         if (!editingUserId) payload.password = document.getElementById('userPassword').value;
@@ -207,5 +305,228 @@ document.addEventListener('DOMContentLoaded', () => {
         loadUsers();
     };
 
+    // =====================================================
+    // المستوى الثاني — مصفوفة الشاشات × الأدوار (ديناميكية بالكامل)
+    // الشكل: كل شاشة عنوان بولد، وأسفلها صف لكل دور، والأعمدة هي
+    // الصلاحيات: إضافة/حذف/تعديل/طباعة/عرض + إخفاء (الوصول).
+    // إخفاء مفعّل لدور = الشاشة تختفي من السايدبار له + منع خلفي 403.
+    // =====================================================
+
+    const MATRIX_FIELDS = [
+        { field: 'create', label: 'إضافة' },
+        { field: 'delete', label: 'حذف'   },
+        { field: 'update', label: 'تعديل' },
+        { field: 'print',  label: 'طباعة' },
+        { field: 'view',   label: 'عرض'   },
+        { field: 'hidden', label: 'إخفاء' },
+    ];
+
+    let matrixRoles = [];
+    let matrixGroups = [];
+    let matrixLoaded = false;
+
+    // تحميل عند فتح التاب الداخلي (مرة واحدة) — وزر التحديث يعيد الجلب دائماً
+    document.querySelector('#usersInnerTabs [data-bs-target="#tab-users-roles"]')
+        ?.addEventListener('shown.bs.tab', () => { if (!matrixLoaded) loadRolesMatrix(); });
+
+    window.loadRolesMatrix = async function (force = false) {
+        const head = document.getElementById('rolesMatrixHead');
+        const body = document.getElementById('rolesMatrixBody');
+
+        try {
+            const res = await fetch('/settings/users/roles', {
+                headers: { 'X-CSRF-TOKEN': csrfToken, 'Accept': 'application/json' },
+            });
+            if (res.status === 403) {
+                body.innerHTML = `<tr><td colspan="7" class="text-center text-danger py-3">هذه الصفحة متاحة لمدير النظام فقط</td></tr>`;
+                return;
+            }
+            const data = await res.json();
+            matrixRoles  = data.roles || [];
+            matrixGroups = data.groups || [];
+            matrixLoaded = true;
+
+            // شريط أدوات إدارة الأدوار فوق المصفوفة (إضافة دور / تعديل / حذف)
+            renderRoleToolbar();
+
+            // الرأس ثابت: عمود الدور + أعمدة الصلاحيات الست
+            head.innerHTML = `<tr>
+                <th class="ps-3" style="min-width:220px;">الدور</th>
+                ${MATRIX_FIELDS.map((f) => `<th class="text-center fw-bold" style="min-width:80px;">${f.label}</th>`).join('')}
+            </tr>`;
+
+            // الجسم: عنوان شاشة بولد ثم صف لكل دور أسفلها
+            let html = '';
+            for (const group of matrixGroups) {
+                for (const screen of group.screens) {
+                    html += `<tr class="table-light">
+                        <td class="ps-3 fw-bold" colspan="7">
+                            <i class="bi bi-window-desktop"></i>
+                            ${esc(screen.name)}
+                            ${screen.locked ? ' <i class="bi bi-lock-fill text-muted" title="شاشة أساسية لا تُخفى"></i>' : ''}
+                        </td>
+                    </tr>`;
+
+                    for (const role of matrixRoles) {
+                        const st = role.screens[screen.key] || {};
+                        html += `<tr>
+                            <td class="ps-4 pe-3" style="padding-right:2.5rem;">
+                                <span class="badge ${role.locked ? 'bg-danger' : 'bg-secondary-subtle text-dark'}">${esc(role.name)}</span>
+                            </td>
+                            ${MATRIX_FIELDS.map((f) => {
+                                const isHiddenCell = f.field === 'hidden';
+                                const disabled = role.locked || (screen.locked && isHiddenCell);
+                                const checked  = role.locked
+                                    ? !isHiddenCell                       // المدير: كل شيء عدا إخفاء
+                                    : (st[f.field] ?? (f.field === 'view'));
+
+                                return `<td class="text-center">
+                                    <input class="form-check-input role-screen-cb" type="checkbox"
+                                           data-role="${role.id}" data-screen="${esc(screen.key)}"
+                                           data-field="${f.field}" data-screen-name="${esc(screen.name)}"
+                                           ${disabled ? 'disabled' : ''} ${checked ? 'checked' : ''}>
+                                </td>`;
+                            }).join('')}
+                        </tr>`;
+                    }
+                }
+            }
+
+            body.innerHTML = html || `<tr><td colspan="7" class="text-center py-4 text-muted">لا توجد شاشات معرّفة</td></tr>`;
+
+            // حفظ تلقائي عند أي تغيير (ديناميكي بالكامل)
+            body.querySelectorAll('.role-screen-cb:not(:disabled)')
+                .forEach((cb) => cb.addEventListener('change', () =>
+                    saveRoleScreen(Number(cb.dataset.role), cb.dataset.screen, cb.dataset.field, cb.checked, cb.dataset.screenName)));
+
+        } catch (e) {
+            body.innerHTML = `<tr><td colspan="7" class="text-center text-danger py-3">تعذر تحميل المصفوفة: ${esc(e.message)}</td></tr>`;
+            toast('تعذر تحميل مصفوفة الأدوار', 'danger');
+        }
+    };
+
+    /** شريط أدوات الأدوار فوق المصفوفة — إضافة/تعديل/حذف الدور */
+    function renderRoleToolbar() {
+        let bar = document.getElementById('roleToolbar');
+        if (!bar) {
+            bar = document.createElement('div');
+            bar.id = 'roleToolbar';
+            bar.className = 'd-flex flex-wrap gap-2 align-items-center mb-2';
+            document.getElementById('rolesMatrixWrap').prepend(bar);
+        }
+
+        bar.innerHTML = `
+            <button type="button" class="btn btn-primary btn-sm" onclick="openRoleModal('matrix')">
+                <i class="bi bi-plus-lg"></i> إضافة دور جديد
+            </button>
+            ${matrixRoles.filter((r) => !r.locked).map((r) => `
+                <span class="badge bg-secondary-subtle text-dark p-2 d-inline-flex gap-2 align-items-center">
+                    ${esc(r.name)}
+                    <a href="javascript:void(0)" title="تعديل الاسم" onclick="renameRole(${r.id}, '${esc(r.name).replace(/'/g, "\\'")}')">
+                        <i class="bi bi-pencil-square text-primary"></i>
+                    </a>
+                    <a href="javascript:void(0)" title="حذف الدور" onclick="deleteRole(${r.id}, '${esc(r.name).replace(/'/g, "\\'")}')">
+                        <i class="bi bi-trash text-danger"></i>
+                    </a>
+                </span>`).join('')}
+        `;
+    }
+
+    /** حفظ مربع واحد فوراً — دور × شاشة × حقل */
+    window.saveRoleScreen = async function (roleId, screenKey, field, value, screenName = '') {
+        const role = matrixRoles.find((r) => r.id === roleId);
+        if (!role || role.locked) return;
+
+        try {
+            const res = await fetch(`/settings/users/roles/${roleId}/screen`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': csrfToken, 'Accept': 'application/json' },
+                body: JSON.stringify({ screen: screenKey, field, value }),
+            });
+            const data = await res.json();
+
+            if (!res.ok || !data.success) {
+                toast(data.message || 'فشل الحفظ', 'danger');
+                // إرجاع مربع الحالة السابقة عند الفشل
+                loadRolesMatrix(true);
+                return;
+            }
+
+            // تحديث الذاكرة المحلية
+            role.screens[screenKey] = { ...(role.screens[screenKey] || {}), [field]: value };
+
+            if (field === 'hidden') {
+                toast(value
+                    ? `ستختفي شاشة «${screenName}» من السايدبار لدور «${role.name}» مع منع الوصول الخلفي`
+                    : `شاشة «${screenName}» ستعود للظهور لدور «${role.name}»`, 'warning');
+            }
+        } catch (e) {
+            toast('خطأ اتصال بالخادم: ' + e.message, 'danger');
+        }
+    };
+
+    // ─── تعديل / حذف دور من شريط أدوات المصفوفة ─────
+    window.renameRole = async function (roleId, currentName) {
+        // نستخدم مودال الدور الجديد بنمط تعديل
+        roleModalMode = 'rename';
+        document.getElementById('roleModalTitle').textContent = 'تعديل اسم الدور';
+        document.getElementById('newRoleName').value = currentName;
+        document.getElementById('roleFormError').classList.add('d-none');
+
+        const saveBtn = document.getElementById('btnSaveRole');
+        const handler = async () => {
+            if (roleModalMode !== 'rename') return;
+            saveBtn.removeEventListener('click', handler);
+            roleModalMode = 'create';
+            const name = document.getElementById('newRoleName').value.trim();
+            if (!name || name === currentName) { roleModal.hide(); return; }
+
+            const res = await fetch(`/settings/users/roles/${roleId}/rename`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': csrfToken, 'Accept': 'application/json' },
+                body: JSON.stringify({ name }),
+            });
+            const data = await res.json();
+
+            if (!res.ok || !data.success) {
+                const errBox = document.getElementById('roleFormError');
+                errBox.textContent = data.message || 'فشل التعديل';
+                errBox.classList.remove('d-none');
+                saveBtn.addEventListener('click', handler);
+                return;
+            }
+
+            roleModal.hide();
+            toast(data.message, 'success');
+            await loadRoles();
+            loadUsers();
+            loadRolesMatrix(true);
+        };
+
+        saveBtn.addEventListener('click', handler);
+        roleModal.show();
+    };
+
+    window.deleteRole = async function (roleId, roleName) {
+        if (!await confirmDialog(
+            `سيتم حذف الدور «${roleName}» نهائياً. لا يمكن التراجع.`,
+            { title: 'حذف دور', okText: 'حذف نهائي', danger: true }
+        )) return;
+
+        const res = await fetch(`/settings/users/roles/${roleId}`, {
+            method: 'DELETE',
+            headers: { 'X-CSRF-TOKEN': csrfToken, 'Accept': 'application/json' },
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) { toast(data.message || 'فشل الحذف', 'danger'); return; }
+        toast(data.message || 'تم حذف الدور', 'success');
+        await loadRoles();
+        loadRolesMatrix(true);
+    };
+
     loadUsers();
+    loadRoles();
+
+    // زر التحديث في تاب المستخدمين — يجلب القائمة والأدوار من جديد
+    window.refreshUsers = function () { loadUsers(); loadRoles(); };
 });

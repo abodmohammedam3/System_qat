@@ -24,13 +24,16 @@
     {{-- محتوى التابات --}}
     <div class="tab-content">
 
-        <div class="tab-pane fade show active" id="tab-backup" role="tabpanel">
+        <div class="tab-pane fade {{ ($activeTab ?? 'backup') === 'backup' ? 'show active' : '' }}" id="tab-backup" role="tabpanel">
 
             @include('settings.system.backup.header')
             @include('settings.system.backup.actions')
             @include('settings.system.backup.table')
 
         </div>
+
+        {{-- المستوى الثاني — تاب المستخدمين والأدوار (نُقل من القائمة الجانبية) --}}
+        @include('settings.system.users-tab')
 
     </div>
 
@@ -45,4 +48,8 @@
 
 @push('scripts')
     @vite(['resources/js/pages/system-settings.js'])
+    {{-- يُحمّل دائماً في صفحة الإعدادات: عند الدخول عبر السايدبار (تاب النسخ)
+    لا يُضبط activeTab=users، وكان هذا يمنع تحميل users.js فيبقى الجدول
+    عالقاً على "جارٍ التحميل…". السكربت آمن لوجوده على كل التابات. --}}
+    @vite(['resources/js/pages/users.js'])
 @endpush

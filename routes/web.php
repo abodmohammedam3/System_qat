@@ -60,6 +60,12 @@ Route::put('/profile/password',  [AuthController::class, 'updatePassword'])->nam
 Route::middleware(['can:manage-users', 'throttle:60,1'])->group(function () {
     Route::get('/settings/users',              [UserController::class, 'index'])->name('users.index');
     Route::get('/settings/users/list',         [UserController::class, 'list'])->name('users.list');
+    // المستوى الثاني — مصفوفة الأدوار والصلاحيات (نفس شاشة المستخدمين، تاب داخلي)
+    Route::get('/settings/users/roles',        [UserController::class, 'rolesMatrix'])->name('users.roles.matrix');
+    Route::put('/settings/users/roles/{role}/screen', [UserController::class, 'updateRoleScreen'])->name('users.roles.screen');
+    Route::post('/settings/users/roles',       [UserController::class, 'storeRole'])->name('users.roles.store');
+    Route::put('/settings/users/roles/{role}/rename', [UserController::class, 'updateRole'])->name('users.roles.rename');
+    Route::delete('/settings/users/roles/{role}', [UserController::class, 'destroyRole'])->name('users.roles.destroy');
     Route::post('/settings/users',             [UserController::class, 'store'])->name('users.store');
     Route::put('/settings/users/{user}',       [UserController::class, 'update'])->name('users.update');
     Route::patch('/settings/users/{user}/toggle', [UserController::class, 'toggle'])->name('users.toggle');
