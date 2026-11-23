@@ -1,0 +1,2 @@
+ملف اختبار صلاحيات مؤقت — سيتم حذفه فور انتهاء الاختبار.
+Temporary permission test file by Z.ai — will be deleted immediately after the test.
