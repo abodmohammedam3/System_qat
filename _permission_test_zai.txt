@@ -1,2 +1,2 @@
-ملف اختبار صلاحيات مؤقت — سيتم حذفه فور انتهاء الاختبار.
-Temporary permission test file by Z.ai — will be deleted immediately after the test.
+ملف اختبار صلاحيات مؤقت (النسخة الثانية بعد التعديل) — تم التحقق من صلاحية التعديل بنجاح.
+Temporary permission test file v2 (after edit) — edit permission verified.
