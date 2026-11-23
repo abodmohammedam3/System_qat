@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>تسجيل الدخول — نظام ERP</title>
+    <title>تسجيل الدخول — وكالة هاشم عبده فارع البراق</title>
     @vite(['resources/css/app.css'])
 </head>
 <body class="bg-light d-flex align-items-center" style="min-height: 100vh;">
@@ -17,7 +17,7 @@
                 <span class="d-inline-flex align-items-center justify-content-center bg-success rounded-3 p-3 shadow-sm mb-3" style="width:64px;height:64px;">
                     <i class="bi bi-grid-1x2-fill text-white fs-3"></i>
                 </span>
-                <h4 class="fw-bold mb-1">نظام ERP</h4>
+                <h4 class="fw-bold mb-1">وكالة هاشم عبده فارع البراق</h4>
                 <small class="text-muted">إدارة موارد المؤسسة — المحاسبة والمخازن</small>
             </div>
 
