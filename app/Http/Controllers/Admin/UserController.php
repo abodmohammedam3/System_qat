@@ -19,7 +19,19 @@ use Illuminate\Validation\Rule;
  */
 class UserController extends Controller
 {
-    public function index(): JsonResponse
+    /**
+     * الإصلاح: كان هذا الإجراء يعيد JsonResponse فقط، رغم أن المسار
+     * GET /settings/users هو الذي يفتح الشاشة من القائمة الجانبية —
+     * فلا كان أي عرض (view) يُرسل أبداً وكانت الشاشة لا تظهر.
+     * الآن: index يعرض setting/users/index.blade.php، وlist يبقى JSON
+     * يغذي الجدول عبر fetch في resources/js/pages/users.js.
+     */
+    public function index(): \Illuminate\View\View
+    {
+        return view('setting.users.index');
+    }
+
+    public function list(): JsonResponse
     {
         $users = User::query()
             ->orderBy('id')
@@ -34,11 +46,6 @@ class UserController extends Controller
                 ['value' => User::ROLE_VIEWER,     'label' => 'مشاهد فقط'],
             ],
         ]);
-    }
-
-    public function list(): JsonResponse
-    {
-        return $this->index();
     }
 
     public function store(Request $request): JsonResponse

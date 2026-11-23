@@ -13,16 +13,12 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware) {
         // ═══════════════════════════════════════════════════════
         // المصادقة الإلزامية على كل مسارات web (الفحص F-01)
-        // يضاف في المقدمة ليعمل قبل بقية الميدلويرات، ويستثني مسار
-        // /login فقط (قائمة الاستثناءات داخل EnsureAuthenticated).
+        // الإصلاح: يعمل الآن في append (بعد StartSession) حتى تُقرأ
+        // كوكي الجلسة قبل التحقق — كان في prepend فكانت Auth::check()
+        // ترجع false دائماً ويعيد التحويل إلى /login بلا توقف.
         // ═══════════════════════════════════════════════════════
-        $middleware->web(prepend: [
-            \App\Http\Middleware\EnsureAuthenticated::class,
-        ]);
-
-        // تحرير قفل الجلسة مبكراً لطلبات AJAX/JSON القرائية (GET فقط بعد
-        // تعديل الفحص F-09) — يمنع تزاحم الطلبات المتوازية دون فتح سباقات كتابة.
         $middleware->web(append: [
+            \App\Http\Middleware\EnsureAuthenticated::class,
             \App\Http\Middleware\ReleaseSessionLock::class,
         ]);
 
