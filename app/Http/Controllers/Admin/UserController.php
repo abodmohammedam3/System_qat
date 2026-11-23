@@ -148,18 +148,20 @@ class UserController extends Controller
      */
     public function updateRoleScreen(Request $request, Role $role): JsonResponse
     {
-        if ($role->slug === 'admin') {
-            return response()->json([
-                'success' => false,
-                'message' => 'صلاحيات مدير النظام ثابتة — يملك كل شيء دائماً',
-            ], 422);
-        }
-
         $validated = $request->validate([
             'screen' => ['required', 'string', 'exists:screens,key'],
             'field'  => ['required', Rule::in(['view', 'create', 'update', 'delete', 'print', 'hidden'])],
             'value'  => ['required', 'boolean'],
         ]);
+
+        // صلاحيات مدير النظام التشغيلية ثابتة (يملك دائماً: عرض، إضافة، تعديل، حذف، طباعة)
+        // لكن يُسمح له بالتحكم في إخفاء/إظهار الشاشة (hidden) عن القائمة إذا رغب في ذلك
+        if ($role->slug === 'admin' && $validated['field'] !== 'hidden') {
+            return response()->json([
+                'success' => false,
+                'message' => 'صلاحيات مدير النظام ثابتة — يملك كل الصلاحيات التشغيلية دائماً',
+            ], 422);
+        }
 
         $screen = Screen::where('key', $validated['screen'])->firstOrFail();
 

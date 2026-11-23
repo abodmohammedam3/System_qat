@@ -375,10 +375,12 @@ document.addEventListener('DOMContentLoaded', () => {
                             </td>
                             ${MATRIX_FIELDS.map((f) => {
                                 const isHiddenCell = f.field === 'hidden';
-                                const disabled = role.locked || (screen.locked && isHiddenCell);
+                                const disabled = isHiddenCell
+                                    ? Boolean(screen.locked)
+                                    : Boolean(role.locked);
                                 const checked  = role.locked
-                                    ? !isHiddenCell                       // المدير: كل شيء عدا إخفاء
-                                    : (st[f.field] ?? (f.field === 'view'));
+                                    ? (isHiddenCell ? Boolean(st.hidden) : true)
+                                    : Boolean(st[f.field] ?? (f.field === 'view'));
 
                                 return `<td class="text-center">
                                     <input class="form-check-input role-screen-cb" type="checkbox"
@@ -435,7 +437,7 @@ document.addEventListener('DOMContentLoaded', () => {
     /** حفظ مربع واحد فوراً — دور × شاشة × حقل */
     window.saveRoleScreen = async function (roleId, screenKey, field, value, screenName = '') {
         const role = matrixRoles.find((r) => r.id === roleId);
-        if (!role || role.locked) return;
+        if (!role || (role.locked && field !== 'hidden')) return;
 
         try {
             const res = await fetch(`/settings/users/roles/${roleId}/screen`, {
@@ -455,10 +457,22 @@ document.addEventListener('DOMContentLoaded', () => {
             // تحديث الذاكرة المحلية
             role.screens[screenKey] = { ...(role.screens[screenKey] || {}), [field]: value };
 
+            const actionLabels = {
+                create: 'إضافة',
+                delete: 'حذف',
+                update: 'تعديل',
+                print:  'طباعة',
+                view:   'عرض',
+                hidden: 'إخفاء',
+            };
+            const label = actionLabels[field] || field;
+
             if (field === 'hidden') {
                 toast(value
                     ? `ستختفي شاشة «${screenName}» من السايدبار لدور «${role.name}» مع منع الوصول الخلفي`
                     : `شاشة «${screenName}» ستعود للظهور لدور «${role.name}»`, 'warning');
+            } else {
+                toast(`تم ${value ? 'منح' : 'سحب'} صلاحية «${label}» لشاشة «${screenName}» لدور «${role.name}»`, 'success');
             }
         } catch (e) {
             toast('خطأ اتصال بالخادم: ' + e.message, 'danger');

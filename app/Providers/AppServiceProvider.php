@@ -52,7 +52,7 @@ class AppServiceProvider extends ServiceProvider
             $user = auth()->user();
             $hidden = [];
 
-            if ($user && ! $user->isAdmin() && $user->role_id) {
+            if ($user && $user->role_id && $user->roleRecord) {
                 $hidden = $user->roleRecord->screens()
                     ->wherePivot('hidden', true)
                     ->pluck('screens.key')

@@ -25,7 +25,7 @@ class EnsureScreenAccess
     {
         $user = $request->user();
 
-        if (! $user || $user->isAdmin()) {
+        if (! $user) {
             return $next($request);
         }
 
@@ -40,29 +40,105 @@ class EnsureScreenAccess
             return $next($request); // لا شاشة مطابقة — ليس من نطاق هذا الميدلوير
         }
 
-        if ($screen['locked'] || ! $screen['hidden']) {
+        // الشاشات الأساسية المقفلة (اللوحة والإعدادات) لا تُمنع أبداً
+        if ($screen['locked']) {
             return $next($request);
         }
 
-        if ($request->expectsJson() || $request->ajax()) {
-            return response()->json([
-                'success' => false,
-                'message' => "تم إخفاء شاشة «{$screen['name']}» عن دورك — راجع مدير النظام",
-            ], 403);
+        // 1) فحص إخفاء الشاشة: ينطبق على أي دور تم تفعيل إخفاء الشاشة له
+        if ($screen['hidden']) {
+            if ($request->expectsJson() || $request->ajax()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => "تم إخفاء شاشة «{$screen['name']}» عن دورك — راجع مدير النظام",
+                ], 403);
+            }
+
+            abort(403, "تم إخفاء شاشة «{$screen['name']}» عن دورك — راجع مدير النظام");
         }
 
-        abort(403, "تم إخفاء شاشة «{$screen['name']}» عن دورك — راجع مدير النظام");
+        // 2) مدير النظام يملك كافة الصلاحيات التشغيلية (عرض، إضافة، تعديل، حذف، طباعة) دائماً
+        if ($user->isAdmin()) {
+            return $next($request);
+        }
+
+        // 3) فحص صلاحيات العمليات للأدوار الأخرى عند وجود تخصيص في المصفوفة
+        if ($screen['has_pivot']) {
+            $action = $this->determineAction($request, $path);
+
+            if ($action && ! ($screen[$action] ?? true)) {
+                $actionLabels = [
+                    'view'   => 'عرض',
+                    'create' => 'إضافة',
+                    'update' => 'تعديل',
+                    'delete' => 'حذف',
+                    'print'  => 'طباعة',
+                ];
+                $label = $actionLabels[$action] ?? $action;
+                $msg = "ليس لديك صلاحية {$label} في شاشة «{$screen['name']}» — راجع مدير النظام";
+
+                if ($request->expectsJson() || $request->ajax()) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => $msg,
+                    ], 403);
+                }
+
+                abort(403, $msg);
+            }
+        }
+
+        return $next($request);
     }
 
-    /** إيجاد الشاشة المطابقة للمسار مع حالة الدور عليها (كاش 60 ثانية). */
+    /** تحديد نوع العملية المطلوبة (view, create, update, delete, print). */
+    private function determineAction(Request $request, string $path): ?string
+    {
+        if (str_contains($path, 'print')) {
+            return 'print';
+        }
+
+        $method = strtoupper($request->method());
+
+        if ($method === 'GET' || $method === 'HEAD') {
+            return 'view';
+        }
+
+        if ($method === 'DELETE') {
+            return 'delete';
+        }
+
+        if ($method === 'PUT' || $method === 'PATCH') {
+            return 'update';
+        }
+
+        if ($method === 'POST') {
+            // العمليات التابعة للتعديل والترحيل المرسلة عبر POST
+            if (
+                str_contains($path, 'toggle')
+                || str_contains($path, 'post')
+                || str_contains($path, 'unpost')
+                || str_contains($path, 'restore')
+            ) {
+                return 'update';
+            }
+
+            return 'create';
+        }
+
+        return null;
+    }
+
+    /** إيجاد الشاشة المطابقة للمسار مع حالة الدور عليها. */
     private function matchScreen(string $path, User $user): ?array
     {
-        $screens = Cache::remember('screens.registry', 60, fn () => Screen::query()
-            ->orderBy('sort')->get(['id', 'key', 'name', 'locked'])
-            ->map(fn (Screen $s) => [
-                'id' => $s->id, 'key' => $s->key,
-                'name' => $s->name, 'locked' => (bool) $s->locked,
-            ])->all());
+        static $screensRegistry = null;
+        if ($screensRegistry === null) {
+            $screensRegistry = Screen::query()
+                ->orderBy('sort')
+                ->get(['id', 'key', 'name', 'locked'])
+                ->keyBy('key');
+        }
 
         $matched = null;
         foreach (config('screens', []) as $def) {
@@ -78,22 +154,29 @@ class EnsureScreenAccess
             return null;
         }
 
-        $reg = collect($screens)->firstWhere('key', $matched['key']);
+        $reg = $screensRegistry->get($matched['key']);
         if (! $reg) {
             return null;
         }
 
         $pivot = $user->roleRecord
             ?->screens()
-            ->whereKey($reg['id'])
+            ->where('screens.id', $reg->id)
             ->first()?->pivot;
 
         return [
-            'key'    => $reg['key'],
-            'name'   => $reg['name'],
-            'locked' => $reg['locked'],
+            'id'        => $reg->id,
+            'key'       => $reg->key,
+            'name'      => $reg->name,
+            'locked'    => (bool) $reg->locked,
             // غياب الصف = غير مخفية (توافق خلفي)
-            'hidden' => (bool) ($pivot->hidden ?? false),
+            'hidden'    => (bool) ($pivot->hidden ?? false),
+            'view'      => (bool) ($pivot->view ?? true),
+            'create'    => (bool) ($pivot->create ?? false),
+            'update'    => (bool) ($pivot->update ?? false),
+            'delete'    => (bool) ($pivot->delete ?? false),
+            'print'     => (bool) ($pivot->print ?? false),
+            'has_pivot' => $pivot !== null,
         ];
     }
 
