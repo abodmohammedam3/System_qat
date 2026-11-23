@@ -51,7 +51,13 @@ Route::put('/profile/password',  [AuthController::class, 'updatePassword'])->nam
 // =====================================================
 // إدارة المستخدمين — للمدير فقط (الفحص F-01)
 // =====================================================
-Route::middleware(['admin', 'throttle:60,1'])->group(function () {
+// =====================================================
+// إدارة المستخدمين — محمية بـ Gate 'manage-users' (للمدير فقط)
+// الإصلاح: كان الفحص عبر ميدلوير الدور مباشرة ('admin') خارج نظام
+// الصلاحيات الموحد — الآن عبر Gate مسجل في AppServiceProvider،
+// ويتحرك تلقائياً مع أي تعديل مستقبلي على الأدوار.
+// =====================================================
+Route::middleware(['can:manage-users', 'throttle:60,1'])->group(function () {
     Route::get('/settings/users',              [UserController::class, 'index'])->name('users.index');
     Route::get('/settings/users/list',         [UserController::class, 'list'])->name('users.list');
     Route::post('/settings/users',             [UserController::class, 'store'])->name('users.store');

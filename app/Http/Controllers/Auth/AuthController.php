@@ -118,6 +118,8 @@ class AuthController extends Controller
 
         $user->forceFill([
             'password' => Hash::make($validated['password']),
+            // إنهاء إجبار التغيير عند أول تغيير ناجح
+            'must_change_password' => false,
         ])->save();
 
         // تجديد الجلسة بعد تغيير كلمة المرور (أمان)

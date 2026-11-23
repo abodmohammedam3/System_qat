@@ -115,6 +115,8 @@
     </div>
 </div>
 
+{{-- التأكيد يتم عبر المودال المشترك appConfirmModal المضمّن في layouts/app.blade.php --}}
+
 @endsection
 
 @push('scripts')

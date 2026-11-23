@@ -71,6 +71,25 @@ class EnsureAuthenticated
             return redirect()->route('login')->with('error', 'تم تعطيل حسابك — راجع مدير النظام');
         }
 
+        // إجبار تغيير كلمة المرور عند أول دخول (الإصلاح الأمني):
+        // كل المسارات محجوبة عدا صفحة/تنفيذ تغيير كلمة المرور وتسجيل الخروج.
+        if (
+            $user->must_change_password
+            && !$request->routeIs('profile.password.*')
+            && !$request->routeIs('logout')
+        ) {
+            if ($request->expectsJson() || $request->ajax()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'يجب تغيير كلمة المرور أولاً',
+                    'must_change_password' => true,
+                ], 403);
+            }
+
+            return redirect()->route('profile.password.show')
+                ->with('warning', 'يجب تغيير كلمة المرور المؤقتة قبل المتابعة');
+        }
+
         return $next($request);
     }
 }

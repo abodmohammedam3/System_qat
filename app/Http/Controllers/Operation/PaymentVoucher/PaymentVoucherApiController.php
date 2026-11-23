@@ -75,7 +75,7 @@ class PaymentVoucherApiController extends Controller
 
     public function nextNumber(): JsonResponse
     {
-        // TODO: Re-enable Permissions::authorize(config('permissions.payment_vouchers.create'));
+        Permissions::authorize(config('permissions.payment_vouchers.create'));
 
         try {
             $number = PaymentVoucherService::generateNextVoucherNumber();
@@ -95,7 +95,7 @@ class PaymentVoucherApiController extends Controller
 
     public function list(Request $request): JsonResponse
     {
-        // TODO: Re-enable Permissions::authorize(config('permissions.payment_vouchers.view'));
+        Permissions::authorize(config('permissions.payment_vouchers.view'));
 
         try {
             $search  = trim((string) $request->query('search', ''));
@@ -123,7 +123,7 @@ class PaymentVoucherApiController extends Controller
 
     public function show(int $id): JsonResponse
     {
-        // TODO: Re-enable Permissions::authorize(config('permissions.payment_vouchers.view'));
+        Permissions::authorize(config('permissions.payment_vouchers.view'));
 
         try {
             $voucher = PaymentVoucherService::findForShow($id);
@@ -162,7 +162,7 @@ class PaymentVoucherApiController extends Controller
 
     public function store(StorePaymentVoucherRequest $request): JsonResponse
     {
-        // TODO: Re-enable Permissions::authorize(config('permissions.payment_vouchers.create'));
+        Permissions::authorize(config('permissions.payment_vouchers.create'));
 
         try {
             $voucher = PaymentVoucherService::create($request->validated());
@@ -187,7 +187,7 @@ class PaymentVoucherApiController extends Controller
         UpdatePaymentVoucherRequest $request,
         int $id
     ): JsonResponse {
-        // TODO: Re-enable Permissions::authorize(config('permissions.payment_vouchers.edit'));
+        Permissions::authorize(config('permissions.payment_vouchers.update'));
 
         try {
             $voucher = PaymentVoucherService::update($id, $request->validated());
@@ -209,7 +209,7 @@ class PaymentVoucherApiController extends Controller
 
     public function destroy(int $id): JsonResponse
     {
-        // TODO: Re-enable Permissions::authorize(config('permissions.payment_vouchers.delete'));
+        Permissions::authorize(config('permissions.payment_vouchers.delete'));
 
         try {
             PaymentVoucherService::delete($id);
@@ -226,7 +226,7 @@ class PaymentVoucherApiController extends Controller
 
     public function post(int $id): JsonResponse
     {
-        // TODO: Re-enable Permissions::authorize(config('permissions.payment_vouchers.post'));
+        Permissions::authorize(config('permissions.payment_vouchers.post'));
 
         try {
             $voucher = PaymentVoucherService::post($id);
@@ -242,7 +242,7 @@ class PaymentVoucherApiController extends Controller
 
     public function unpost(int $id): JsonResponse
     {
-        // TODO: Re-enable Permissions::authorize(config('permissions.payment_vouchers.post'));
+        Permissions::authorize(config('permissions.payment_vouchers.unpost'));
 
         try {
             $voucher = PaymentVoucherService::unpost($id);
@@ -261,7 +261,7 @@ class PaymentVoucherApiController extends Controller
 
     public function currencies(): JsonResponse
     {
-        // TODO: Re-enable Permissions::authorize(config('permissions.payment_vouchers.view'));
+        Permissions::authorize(config('permissions.payment_vouchers.view'));
 
         try {
             $currencies = PaymentVoucherService::getCurrencies()
@@ -291,7 +291,7 @@ class PaymentVoucherApiController extends Controller
 
     public function picker(Request $request): JsonResponse
     {
-        // TODO: Re-enable Permissions::authorize(config('permissions.payment_vouchers.view'));
+        Permissions::authorize(config('permissions.payment_vouchers.view'));
 
         try {
             $type = (string) $request->query('type', 'supplier');
