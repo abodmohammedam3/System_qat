@@ -6,6 +6,7 @@ use App\Models\Accounting\CharAccount;
 use App\Models\Inventory\InventoryMovement;
 use App\Models\Inventory\InventoryMovementDetail;
 use App\Models\Inventory\Stock;
+use App\Models\Purchases\DistributionDetail;
 use App\Models\Sales\SalesInvoice;
 use App\Models\Sales\SalesInvoiceDetail;
 use App\Services\Inventory\InventoryService;
@@ -47,7 +48,7 @@ class SalesInvoiceService
                 $details = $data['details'] ?? [];
 
                 $this->lockStockRows($details);
-                
+
                 // ✅ تخطي التحقق من المخزون إذا كان الطلب قادماً من توزيع
                 if (empty($data['skip_stock_validation'])) {
                     $this->validateStockAvailability($details);
@@ -64,12 +65,53 @@ class SalesInvoiceService
                 $this->saveDetails($invoice, $details);
                 $this->recalculateTotals($invoice);
 
+                // ✅ جديد: ربط صفوف التوزيع غير المفوترة بهذه الفاتورة
+                // يجب أن يتم قبل postInternal حتى تعرف syncInventoryMovement
+                // أن الفاتورة من توزيع (تصير حركة بيع توزيع بدون خصم مزدوج).
+                if (!empty($data['distribution_detail_ids'])) {
+                    $this->linkDistributionDetails($invoice, $data['distribution_detail_ids']);
+                }
+
                 // ✅ ترحيل تلقائي
                 $this->postInternal($invoice);
 
                 return $invoice->fresh(['details', 'customerAccount']);
             });
         });
+    }
+
+    /**
+     * ✅ جديد: ربط صفوف التوزيع (distribution_details) بفاتورة البيع.
+     * يتحقق أن الصفوف غير مفوترة مسبقاً ثم يربطها.
+     */
+    protected function linkDistributionDetails(SalesInvoice $invoice, array $detailIds): void
+    {
+        $detailIds = array_map('intval', $detailIds);
+
+        $rows = DistributionDetail::query()
+            ->whereIn('id', $detailIds)
+            ->lockForUpdate()
+            ->get();
+
+        $missing = collect($detailIds)->diff($rows->pluck('id'));
+        if ($missing->isNotEmpty()) {
+            throw ValidationException::withMessages([
+                'distribution_detail_ids' => 'بعض صفوف التوزيع المحددة غير موجودة.',
+            ]);
+        }
+
+        $alreadyInvoiced = $rows->filter(fn($r) => $r->sales_invoice_id !== null || $r->invoiced_at !== null);
+        if ($alreadyInvoiced->isNotEmpty()) {
+            throw ValidationException::withMessages([
+                'distribution_detail_ids' => 'صفوف التوزيع التالية مفوترة مسبقاً: '
+                    . $alreadyInvoiced->pluck('id')->implode(', '),
+            ]);
+        }
+
+        DistributionDetail::whereIn('id', $detailIds)->update([
+            'sales_invoice_id' => $invoice->sales_invoice_id,
+            'invoiced_at'      => now(),
+        ]);
     }
 
     // =========================================================
@@ -97,9 +139,9 @@ public function update(int $id, array $data): SalesInvoice
 
             $details = $data['details'] ?? [];
             $this->lockStockRows($details);
-            
+
             // ✅ 1) اكتشف إذا كانت الفاتورة تم إصدارها من شاشة التوزيع
-            $isFromDistribution = \App\Models\Purchases\DistributionDetail::where('sales_invoice_id', $invoice->sales_invoice_id)->exists();
+            $isFromDistribution = DistributionDetail::where('sales_invoice_id', $invoice->sales_invoice_id)->exists();
 
             // ✅ 2) تخطي التحقق من المخزون إذا كانت من التوزيع (لأنها محجوزة مسبقاً)
             if (!$isFromDistribution && empty($data['skip_stock_validation'])) {
@@ -116,7 +158,7 @@ public function update(int $id, array $data): SalesInvoice
                     $itemId      = (int) ($row['item_id'] ?? 0);
                     $warehouseId = (int) ($row['warehouse_id'] ?? 0);
                     $newQty      = (float) ($row['quantity'] ?? 0);
-                    
+
                     if (!$itemId || !$warehouseId || $newQty <= 0) continue;
 
                     $key    = "{$itemId}|{$warehouseId}";
@@ -125,7 +167,7 @@ public function update(int $id, array $data): SalesInvoice
                     if ($newQty > $oldQty + 0.000001) {
                         $validateDetails[$i] = array_merge($row, ['quantity' => $newQty - $oldQty]);
                     }
-                    
+
                     if (isset($currentQty[$key])) {
                         $currentQty[$key] = max(0, $currentQty[$key] - $newQty);
                     }
@@ -177,6 +219,13 @@ public function update(int $id, array $data): SalesInvoice
 
                 $this->deleteAccountingEntry($invoice);
                 $this->deleteInventoryMovement($invoice);
+
+                // ✅ جديد: فك ربط صفوف التوزيع المرتبطة بهذه الفاتورة
+                // حتى يمكن إعادة إصدار فاتورة لها لاحقاً.
+                DistributionDetail::where('sales_invoice_id', $invoice->sales_invoice_id)->update([
+                    'sales_invoice_id' => null,
+                    'invoiced_at'      => null,
+                ]);
 
                 $invoice->details()->delete();
                 $invoice->delete();
@@ -367,11 +416,22 @@ public function update(int $id, array $data): SalesInvoice
 
     // =========================================================
     // INVENTORY MOVEMENT
+    // الفاتورة المرتبطة بصفوف توزيع → حركة "بيع توزيع" توثيقية
+    // (الخصم الفعلي تم عبر حركة "توزيع" عند حفظ التوزيع).
     // =========================================================
     public function syncInventoryMovement(SalesInvoice $invoice): void
     {
         $invoice->loadMissing('customerAccount');
         $this->deleteInventoryMovement($invoice);
+
+        $isFromDistribution = DistributionDetail::where(
+            'sales_invoice_id',
+            $invoice->sales_invoice_id
+        )->exists();
+
+        $movementType = $isFromDistribution
+            ? InventoryMovement::TYPE_SALE_DISTRIBUTION
+            : InventoryMovement::TYPE_SALE;
 
         $lastMovement = InventoryMovement::lockForUpdate()
             ->orderBy('movement_id', 'desc')
@@ -392,7 +452,9 @@ public function update(int $id, array $data): SalesInvoice
 
         $statement = trim((string) ($invoice->statement ?? ''));
         if ($statement === '') {
-            $statement = 'صرف تلقائي من فاتورة البيع رقم ' . $invoice->invoice_number;
+            $statement = $isFromDistribution
+                ? 'بيع توزيع — إصدار فاتورة بيع لصناف موزعة رقم ' . $invoice->invoice_number
+                : 'صرف تلقائي من فاتورة البيع رقم ' . $invoice->invoice_number;
         }
         if ($customerName !== '') {
             $statement .= ' — العميل: ' . $customerName;
@@ -400,10 +462,8 @@ public function update(int $id, array $data): SalesInvoice
 
         $movement = InventoryMovement::create([
             'display_id'      => (string) $nextNumber,
-            'movement_type'   => InventoryMovement::TYPE_SALE,
-            'direction'       => InventoryMovement::directionForType(
-                                    InventoryMovement::TYPE_SALE
-                                 ),
+            'movement_type'   => $movementType,
+            'direction'       => InventoryMovement::directionForType($movementType),
             'movement_date'   => $invoice->invoice_date,
             'document_number' => $invoice->invoice_number,
             'warehouse_id'    => $headerWarehouse,
@@ -720,22 +780,29 @@ public function update(int $id, array $data): SalesInvoice
                 ? (int) $row['supplier_account_id']
                 : null;
 
-            $serverCost = $this->inventoryService->lastCostForSupplier(
-                $itemId,
-                $warehouseId,
-                $unitId,
-                $supplierId
-            );
-
-            $uiCost = (float) ($row['cost_price'] ?? 0);
-
-            if ($uiCost <= 0) {
-                $costPrice = $serverCost;
-            } elseif ($serverCost <= 0) {
-                $costPrice = $uiCost;
+            // ✅ صفوف التوزيع: التكلفة تُحسب مسبقاً بوحدة الصف نفسه
+            // (تكلفة الدفعة × معامل التحويل) ولا تجري مقارنة مع تكلفة
+            // الخادم لأنها بوحدة مختلفة (حبة مقابل كيلو مثلاً).
+            if (!empty($row['distribution_detail_id'])) {
+                $costPrice = (float) ($row['cost_price'] ?? 0);
             } else {
-                $diffRatio = abs($uiCost - $serverCost) / $serverCost;
-                $costPrice = $diffRatio > 0.1 ? $serverCost : $uiCost;
+                $serverCost = $this->inventoryService->lastCostForSupplier(
+                    $itemId,
+                    $warehouseId,
+                    $unitId,
+                    $supplierId
+                );
+
+                $uiCost = (float) ($row['cost_price'] ?? 0);
+
+                if ($uiCost <= 0) {
+                    $costPrice = $serverCost;
+                } elseif ($serverCost <= 0) {
+                    $costPrice = $uiCost;
+                } else {
+                    $diffRatio = abs($uiCost - $serverCost) / $serverCost;
+                    $costPrice = $diffRatio > 0.1 ? $serverCost : $uiCost;
+                }
             }
 
             SalesInvoiceDetail::create([
