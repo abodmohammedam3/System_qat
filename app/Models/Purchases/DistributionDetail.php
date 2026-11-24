@@ -4,6 +4,8 @@ namespace App\Models\Purchases;
 
 use Illuminate\Database\Eloquent\Model;
 use App\Models\Customer;
+use App\Models\Inventory\Type;
+use App\Models\Inventory\Unit;
 use App\Models\Inventory\InventoryMovement;
 use App\Models\Inventory\InventoryMovementDetail;
 
@@ -13,10 +15,13 @@ class DistributionDetail extends Model
     protected $guarded = ['id'];
 
     protected $casts = [
-        'quantity'    => 'decimal:6',
-        'unit_cost'   => 'decimal:6',
-        'sale_price'  => 'decimal:6',
-        'invoiced_at' => 'datetime',
+        'quantity'     => 'decimal:6',
+        'quantity_base' => 'decimal:6',
+        'unit_weight'  => 'decimal:4',
+        'unit_cost'    => 'decimal:6',
+        'sale_price'   => 'decimal:6',
+        'total'        => 'decimal:6',
+        'invoiced_at'  => 'datetime',
     ];
 
     public function distribution()
@@ -27,6 +32,18 @@ class DistributionDetail extends Model
     public function customer()
     {
         return $this->belongsTo(Customer::class, 'customer_id', 'CustomersID');
+    }
+
+    /** نوع الصنف المختار في نافذة التوزيع (من شاشة الأنواع) */
+    public function type()
+    {
+        return $this->belongsTo(Type::class, 'type_id', 'id');
+    }
+
+    /** وحدة التوزيع (افتراضي: حبة) من شاشة الوحدات */
+    public function unit()
+    {
+        return $this->belongsTo(Unit::class, 'unit_id', 'UnitID');
     }
 
     public function purchaseInvoice()
