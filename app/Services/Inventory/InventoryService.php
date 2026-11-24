@@ -56,6 +56,9 @@ class InventoryService
 
     // =====================================================
     // القراءة
+    // ملاحظة مهمة: حركات "بيع توزيع" (sale_distribution) توثيقية
+    // فقط — البضاعة خرجت فعلياً من المخزن عبر حركة "توزيع" عند
+    // حفظ التوزيع، لذلك تُستثنى من مجموع الخروج لتفادي الخصم المزدوج.
     // =====================================================
     public function availableQuantity(int $itemId, int $warehouseId, ?int $unitId = null): float
     {
@@ -73,6 +76,7 @@ class InventoryService
             ->where('inventory_movement_details.warehouse_id', $warehouseId)
             ->when($unitId !== null, fn($q) => $q->where('inventory_movement_details.unit_id', $unitId))
             ->where('inventory_movements.direction', 'out')
+            ->where('inventory_movements.movement_type', '!=', InventoryMovement::TYPE_SALE_DISTRIBUTION)
             ->sum('inventory_movement_details.quantity');
 
         return (float) $in - (float) $out;
@@ -109,6 +113,7 @@ class InventoryService
                 fn($q) => $q->where('inventory_movement_details.supplier_account_id', $supplierAccountId)
             )
             ->where('inventory_movements.direction', 'out')
+            ->where('inventory_movements.movement_type', '!=', InventoryMovement::TYPE_SALE_DISTRIBUTION)
             ->sum('inventory_movement_details.quantity');
 
         return (float) $in - (float) $out;
@@ -201,7 +206,9 @@ class InventoryService
     }
 
     // =====================================================
-    // ✅ الفرز — مع دعم batch_id (فاتورة محددة)
+    // الفرز — مع دعم batch_id (فاتورة محددة)
+    // ملاحظة: مجموع الموزّع يُقرأ من quantity_base (الكمية محوّلة
+    // إلى وحدة الدفعة) لضمان صحة المقارنة مع وحدات توزيع مختلفة.
     // =====================================================
     public function sortInventory(array $data): array
     {
@@ -256,7 +263,7 @@ class InventoryService
 
                 $distributed = (float) DB::table('distribution_details')
                     ->where('movement_detail_id', $batchId)
-                    ->sum('quantity');
+                    ->sum('quantity_base');
 
                 $sortedOut = (float) DB::table('inventory_movement_details as imd')
                     ->join('inventory_movements as im', 'im.movement_id', '=', 'imd.movement_id')

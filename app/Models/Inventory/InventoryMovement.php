@@ -39,9 +39,18 @@ class InventoryMovement extends Model
     const TYPE_PURCHASE_RETURN = 'purchase_return';
     const TYPE_SALE_RETURN     = 'sale_return';
 
-    /* ✅ جديد: أنواع الفرز/تحويل الوحدات (أي وحدتين — لا يقتصر على كيلو/حبة) */
+    /* أنواع الفرز/تحويل الوحدات (أي وحدتين — لا يقتصر على كيلو/حبة) */
     const TYPE_SORTING_OUT     = 'sorting_out';   // فرز/تحويل وحدات (خروج)
     const TYPE_SORTING_IN      = 'sorting_in';    // فرز/تحويل وحدات (دخول)
+
+    /* ✅ جديد: التوزيع وإصدار فاتورة بيع من التوزيع
+     *  - distribution      : توزيع (خروج فعلي من المخزن عند حفظ التوزيع)
+     *  - sale_distribution : بيع توزيع (توثيق إصدار فاتورة البيع لصناف
+     *                        تم توزيعها مسبقاً — لا يكرر خصم المخزون،
+     *                        ويُستثنى من حسابات الأرصدة في InventoryService).
+     */
+    const TYPE_DISTRIBUTION       = 'distribution';
+    const TYPE_SALE_DISTRIBUTION  = 'sale_distribution';
 
     // ============================================
     // ثوابت المصدر
@@ -52,6 +61,7 @@ class InventoryMovement extends Model
     const SOURCE_SORTING          = 'sorting';
     const SOURCE_SALES_RETURN     = 'sales_return';
     const SOURCE_PURCHASE_RETURN  = 'purchase_return';
+    const SOURCE_DISTRIBUTION     = 'distribution';
 
     // ============================================
     // ثوابت الاتجاه
@@ -63,28 +73,32 @@ class InventoryMovement extends Model
     // خريطة: نوع الحركة → الاتجاه
     // ============================================
     const TYPE_DIRECTION_MAP = [
-        self::TYPE_SUPPLY          => self::DIRECTION_IN,
-        self::TYPE_PURCHASE        => self::DIRECTION_IN,
-        self::TYPE_SALE_RETURN     => self::DIRECTION_IN,
-        self::TYPE_SORTING_IN      => self::DIRECTION_IN,
-        self::TYPE_ISSUE           => self::DIRECTION_OUT,
-        self::TYPE_SALE            => self::DIRECTION_OUT,
-        self::TYPE_PURCHASE_RETURN => self::DIRECTION_OUT,
-        self::TYPE_SORTING_OUT     => self::DIRECTION_OUT,
+        self::TYPE_SUPPLY           => self::DIRECTION_IN,
+        self::TYPE_PURCHASE         => self::DIRECTION_IN,
+        self::TYPE_SALE_RETURN      => self::DIRECTION_IN,
+        self::TYPE_SORTING_IN       => self::DIRECTION_IN,
+        self::TYPE_ISSUE            => self::DIRECTION_OUT,
+        self::TYPE_SALE             => self::DIRECTION_OUT,
+        self::TYPE_PURCHASE_RETURN  => self::DIRECTION_OUT,
+        self::TYPE_SORTING_OUT      => self::DIRECTION_OUT,
+        self::TYPE_DISTRIBUTION     => self::DIRECTION_OUT,
+        self::TYPE_SALE_DISTRIBUTION => self::DIRECTION_OUT,
     ];
 
     // ============================================
     // خريطة: نوع الحركة → التسمية العربية
     // ============================================
     const TYPE_LABELS = [
-        self::TYPE_SUPPLY          => 'توريد مخزني',
-        self::TYPE_ISSUE           => 'صرف مخزني',
-        self::TYPE_PURCHASE        => 'توريد شراء',
-        self::TYPE_SALE            => 'صرف بيع',
-        self::TYPE_PURCHASE_RETURN => 'مرتجع شراء',
-        self::TYPE_SALE_RETURN     => 'مرتجع بيع',
-        self::TYPE_SORTING_OUT     => 'فرز/تحويل وحدات (خروج)',
-        self::TYPE_SORTING_IN      => 'فرز/تحويل وحدات (دخول)',
+        self::TYPE_SUPPLY           => 'توريد مخزني',
+        self::TYPE_ISSUE            => 'صرف مخزني',
+        self::TYPE_PURCHASE         => 'توريد شراء',
+        self::TYPE_SALE             => 'صرف بيع',
+        self::TYPE_PURCHASE_RETURN  => 'مرتجع شراء',
+        self::TYPE_SALE_RETURN      => 'مرتجع بيع',
+        self::TYPE_SORTING_OUT      => 'فرز/تحويل وحدات (خروج)',
+        self::TYPE_SORTING_IN       => 'فرز/تحويل وحدات (دخول)',
+        self::TYPE_DISTRIBUTION     => 'توزيع',
+        self::TYPE_SALE_DISTRIBUTION => 'بيع توزيع',
     ];
 
     // ============================================
