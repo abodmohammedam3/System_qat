@@ -17,7 +17,7 @@ class PurchaseInvoiceDetail extends Model
     protected $fillable = [
         'purchase_invoice_id',
         'item_id',
-        'type_id',
+        // type_id حُذف من الجدول — النوع يُختار في نافذة التوزيع
         'unit_id',
         'code',
         'quantity',

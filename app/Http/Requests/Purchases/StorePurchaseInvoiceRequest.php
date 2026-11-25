@@ -41,7 +41,7 @@ class StorePurchaseInvoiceRequest extends FormRequest
 
             'details'            => ['required', 'array', 'min:1'],
             'details.*.item_id'  => ['required', 'exists:items,itemID'],
-            'details.*.type_id'  => ['nullable', 'exists:type,id'],
+            // type_id حُذف من تفاصيل الشراء — النوع يُختار في نافذة التوزيع
             'details.*.unit_id'  => ['nullable', 'exists:units,UnitID'],
             'details.*.code'     => ['nullable', 'string', 'max:50'],
             'details.*.quantity' => ['required', 'numeric', 'gt:0'],

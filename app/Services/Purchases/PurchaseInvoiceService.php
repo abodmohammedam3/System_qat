@@ -556,7 +556,8 @@ class PurchaseInvoiceService
             InventoryMovementDetail::create([
                 'movement_id'  => $movement->movement_id,
                 'item_id'      => $detail->item_id,
-                'type_id'      => $detail->type_id,
+                // حركة الشراء بلا نوع — النوع يُملأ لاحقاً في تفاصيل حركة التوزيع
+                'type_id'      => null,
                 'unit_id'      => $detail->unit_id,
                 'code'         => $detail->code,
                 'warehouse_id' => $invoice->warehouse_id,
@@ -785,7 +786,7 @@ class PurchaseInvoiceService
             PurchaseInvoiceDetail::create([
                 'purchase_invoice_id' => $invoice->purchase_invoice_id,
                 'item_id'             => $row['item_id'],
-                'type_id'             => $row['type_id'] ?? null,
+                // النوع (type_id) حُذف من تفاصيل الشراء — يُختار لاحقاً في نافذة التوزيع
                 'unit_id'             => $row['unit_id'] ?? null,
                 'code'                => $row['code'] ?? null,
                 'quantity'            => $quantity,

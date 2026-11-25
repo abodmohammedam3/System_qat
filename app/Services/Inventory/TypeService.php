@@ -4,7 +4,7 @@ namespace App\Services\Inventory;
 
 use App\Models\Inventory\Type;
 use App\Models\Inventory\InventoryMovementDetail;
-use App\Models\Purchases\PurchaseInvoiceDetail;
+use App\Models\Purchases\DistributionDetail;
 use App\Models\Purchases\PurchaseReturnDetail;
 use App\Models\Sales\SalesInvoiceDetail;
 use App\Models\Sales\SalesReturnDetail;
@@ -25,9 +25,11 @@ class TypeService
     private const LOCK_TTL = 10;
     private const PAGE_SIZE = 100;
 
-    /** الجداول التي تستهلك النوع (فحص ما قبل الحذف) */
+    /** الجداول التي تستهلك النوع (فحص ما قبل الحذف)
+     *  ملاحظة: تفاصيل فاتورة الشراء لم تعد تحمل type_id (حُذف العمود) —
+     *  النوع يُستهلك الآن في نافذة التوزيع وتفاصيلها. */
     private const USAGE_TABLES = [
-        PurchaseInvoiceDetail::class    => 'فواتير الشراء',
+        DistributionDetail::class       => 'نافذة التوزيع',
         PurchaseReturnDetail::class     => 'مردودات المشتريات',
         SalesInvoiceDetail::class       => 'فواتير البيع',
         SalesReturnDetail::class        => 'مردودات المبيعات',
