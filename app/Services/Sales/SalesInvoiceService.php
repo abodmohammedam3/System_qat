@@ -780,11 +780,19 @@ public function update(int $id, array $data): SalesInvoice
                 ? (int) $row['supplier_account_id']
                 : null;
 
-            // ✅ صفوف التوزيع: التكلفة تُحسب مسبقاً بوحدة الصف نفسه
-            // (تكلفة الدفعة × معامل التحويل) ولا تجري مقارنة مع تكلفة
-            // الخادم لأنها بوحدة مختلفة (حبة مقابل كيلو مثلاً).
+            // ✅ صفوف التوزيع: التكلفة تُحتسب خادمياً حصراً — لا ثقة بحقل الواجهة
+            // (تزوير cost_price كان سيفسد COGS والقيد المحاسبي وحركة المخزون).
+            // distribution_details.unit_cost مخزّن بوحدة الصف نفسه من التحويل
+            // الخادمي (bcmath) في PurchaseDistributionController.
             if (!empty($row['distribution_detail_id'])) {
-                $costPrice = (float) ($row['cost_price'] ?? 0);
+                $costPrice = $this->distributionRowCost(
+                    $invoice,
+                    $row,
+                    $itemId,
+                    $warehouseId,
+                    $unitId,
+                    $supplierId
+                );
             } else {
                 $serverCost = $this->inventoryService->lastCostForSupplier(
                     $itemId,
@@ -820,6 +828,68 @@ public function update(int $id, array $data): SalesInvoice
                 'total'            => $total,
             ]);
         }
+    }
+
+    /**
+     * ✅ تكلفة صف فاتورة بيع مرتبط بصف توزيع — مصدرها الخادم حصراً.
+     *
+     * التسلسل:
+     *  1) distribution_details.unit_cost (مخزّن خادمياً بوحدة الصف عند حفظ التوزيع).
+     *  2) للصفوف القديمة بلا تكلفة مخزنة: تكلفة دفعة المصدر × (quantity_base / quantity).
+     *  3) شبكة أمان أخيرة: آخر تكلفة للمورد.
+     *
+     * يرفض الصف إذا كان صف التوزيع غير موجود، أو لا يطابق صنف الفاتورة،
+     * أو مفوتراً مسبقاً بفاتورة أخرى (حماية من الربط المزدوج).
+     */
+    protected function distributionRowCost(
+        SalesInvoice $invoice,
+        array $row,
+        int $itemId,
+        int $warehouseId,
+        ?int $unitId,
+        ?int $supplierId
+    ): float {
+        $dd = DistributionDetail::query()
+            ->with('movementDetail')
+            ->lockForUpdate()
+            ->find((int) $row['distribution_detail_id']);
+
+        if (!$dd || !$dd->movementDetail || (int) $dd->movementDetail->item_id !== $itemId) {
+            throw ValidationException::withMessages([
+                'details' => 'صف توزيع غير صالح أو لا يطابق صنف الفاتورة.',
+            ]);
+        }
+
+        $linkedToOther = $dd->sales_invoice_id !== null
+            && (int) $dd->sales_invoice_id !== (int) $invoice->sales_invoice_id;
+
+        if ($linkedToOther || ($dd->sales_invoice_id === null && $dd->invoiced_at !== null)) {
+            throw ValidationException::withMessages([
+                'details' => "صف التوزيع رقم {$dd->id} مفوتر مسبقاً بفاتورة أخرى.",
+            ]);
+        }
+
+        $storedCost = (float) $dd->unit_cost;
+        if ($storedCost > 0) {
+            return $storedCost;
+        }
+
+        // صف قديم بلا تكلفة مخزنة — احسبها من دفعة المصدر (بوحدة الصف)
+        $mdCost  = (float) ($dd->movementDetail->unit_cost ?? 0);
+        $ddQty   = (float) $dd->quantity;
+        $qtyBase = (float) $dd->quantity_base > 0 ? (float) $dd->quantity_base : $ddQty;
+
+        if ($mdCost > 0 && $ddQty > 0) {
+            return round($mdCost * ($qtyBase / $ddQty), 6);
+        }
+
+        // شبكة الأمان الأخيرة
+        return (float) $this->inventoryService->lastCostForSupplier(
+            $itemId,
+            $warehouseId,
+            $unitId,
+            $supplierId
+        );
     }
 
     protected function recalculateTotals(SalesInvoice $invoice): void
