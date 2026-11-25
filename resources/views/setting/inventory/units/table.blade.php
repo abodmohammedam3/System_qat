@@ -16,6 +16,7 @@
                     <tr class="text-center">
                         <th style="width: 60px;">الرقم</th>
                         <th>اسم الوحدة</th>
+                        <th style="width: 140px;">معامل التحويل (جرام)</th>
                         <th style="width: 120px;">الحالة</th>
                         <th style="width: 180px;" class="no-print">الإجراءات</th>
                     </tr>
@@ -25,10 +26,12 @@
                         <tr class="unit-row text-center"
                             data-id="{{ $unit->UnitID }}"
                             data-name="{{ $unit->UnitName }}"
+                            data-factor="{{ $unit->conversion_factor ?? 1 }}"
                             data-active="{{ $unit->is_active ? 1 : 0 }}">
 
                             <td>{{ $loop->iteration }}</td>
                             <td class="row-name text-center">{{ $unit->UnitName }}</td>
+                            <td class="row-factor text-center">{{ $unit->conversion_factor ?? 1 }}</td>
                             <td class="row-status">
                                 <button type="button"
                                         class="btn btn-sm {{ $unit->is_active ? 'btn-success' : 'btn-secondary' }} toggle-status-btn"
@@ -80,6 +83,8 @@
         <td class="row-index"></td>
 
         <td class="row-name text-center"></td>
+
+        <td class="row-factor text-center"></td>
 
         <td class="row-status">
             <button type="button"

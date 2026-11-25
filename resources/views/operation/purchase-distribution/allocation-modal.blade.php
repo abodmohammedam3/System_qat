@@ -48,7 +48,7 @@
                     </div>
                     <div class="col">
                         <div class="bg-light rounded-3 p-2">
-                            <div class="text-muted" style="font-size:0.72rem;">موزَّع</div>
+                            <div class="text-muted" style="font-size:0.72rem;">موزّع</div>
                             <div class="fw-bold text-success" id="allocAllocated">—</div>
                         </div>
                     </div>
@@ -67,7 +67,7 @@
                 </div>
 
                 <div class="d-flex justify-content-between align-items-center mb-2">
-                    <h6 class="mb-0 fw-semibold small">العملاء الموزَّع لهم</h6>
+                    <h6 class="mb-0 fw-semibold small">العملاء الموزّع لهم</h6>
                     <button type="button" class="btn btn-sm btn-success" id="btnAddCustomerToItem">
                         <i class="bi bi-plus-lg"></i> إضافة عميل
                     </button>
@@ -79,6 +79,8 @@
                         <thead class="table-light sticky-top">
                             <tr class="small text-muted">
                                 <th>العميل</th>
+                                <!-- عمود النوع — إلزامي من شاشة الأنواع -->
+                                <th style="width:120px" class="text-center">النوع</th>
                                 <!-- تم توسيع عمود الوحدة من 92px إلى 150px لاستيعاب الحقول المتراصة -->
                                 <th style="width:150px" class="text-center">الوحدة</th>
                                 <th style="width:88px" class="text-center">الكمية</th>

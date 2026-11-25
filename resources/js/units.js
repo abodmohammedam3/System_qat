@@ -113,11 +113,13 @@ function renderUnits(data) {
         /* بيانات الصف (data-*) */
         row.dataset.id = unit.UnitID;
         row.dataset.name = unit.UnitName;
+        row.dataset.factor = unit.conversion_factor ?? 1;
         row.dataset.active = isAct ? 1 : 0;
 
-        /* الرقم التسلسلي واسم الوحدة */
+        /* الرقم التسلسلي واسم الوحدة ومعامل التحويل */
         row.querySelector('.row-index').textContent = i + 1;
         row.querySelector('.row-name').textContent = unit.UnitName;
+        row.querySelector('.row-factor').textContent = unit.conversion_factor ?? 1;
 
         /* زر الحالة */
         const statusBtn =
@@ -242,6 +244,7 @@ function editUnit(btn) {
 
     document.getElementById('unitID').value = row.dataset.id;
     document.getElementById('unitName').value = row.dataset.name;
+    document.getElementById('unitConversionFactor').value = row.dataset.factor || 1;
 
     const modalEl =
         document.getElementById('unitModal');
@@ -304,6 +307,7 @@ async function saveUnit() {
 
     const payload = {
         UnitName: unitName,
+        conversion_factor: Math.max(0, parseFloat(document.getElementById('unitConversionFactor')?.value) || 1),
     };
 
     const url =
