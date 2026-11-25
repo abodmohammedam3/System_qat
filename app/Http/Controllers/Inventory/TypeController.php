@@ -9,7 +9,10 @@ use App\Http\Resources\Inventory\TypeResource;
 use App\Services\Inventory\TypeService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\View\View;
+
+const TYPES_LIST_CACHE_KEY = 'types_list_full_v1';
 
 /**
  * Controller نحيف — كل منطق الأعمال في TypeService (نمط الوحدة المرجعية).
@@ -35,7 +38,7 @@ class TypeController extends Controller
 
         // full=1: القائمة الكاملة (طباعة/تصدير) — عقد متوافق مع الواجهة الحالية
         if ($full) {
-            $types = $this->service->allForView();
+            $types = Cache::remember(TYPES_LIST_CACHE_KEY, 300, fn () => $this->service->allForView());
 
             return response()->json([
                 'success' => true,
@@ -61,6 +64,7 @@ class TypeController extends Controller
     {
         try {
             $type = $this->service->store($request->validated());
+            Cache::forget(TYPES_LIST_CACHE_KEY);
 
             return response()->json([
                 'success' => true,
@@ -76,6 +80,7 @@ class TypeController extends Controller
     {
         try {
             $type = $this->service->update((int) $id, $request->validated());
+            Cache::forget(TYPES_LIST_CACHE_KEY);
 
             return response()->json([
                 'success' => true,
@@ -91,6 +96,7 @@ class TypeController extends Controller
     {
         try {
             $this->service->delete((int) $id);
+            Cache::forget(TYPES_LIST_CACHE_KEY);
 
             return response()->json([
                 'success' => true,
@@ -105,6 +111,7 @@ class TypeController extends Controller
     {
         try {
             $type = $this->service->toggleStatus((int) $id);
+            Cache::forget(TYPES_LIST_CACHE_KEY);
 
             $statusText = $type->is_active ? 'تم التفعيل' : 'تم التعطيل';
 

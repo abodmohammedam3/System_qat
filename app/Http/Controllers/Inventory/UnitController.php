@@ -10,7 +10,10 @@ use App\Models\Inventory\Unit;
 use App\Services\Inventory\UnitService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\View\View;
+
+const UNITS_LIST_CACHE_KEY = 'units_list_full_v1';
 
 /**
  * Controller نحيف — كل منطق الأعمال في UnitService (نموذج الوحدة 1).
@@ -36,7 +39,7 @@ class UnitController extends Controller
 
         // full=1: القائمة الكاملة (طباعة/تصدير) — عقد متوافق مع الواجهة الحالية
         if ($full) {
-            $units = $this->service->allForView();
+            $units = Cache::remember(UNITS_LIST_CACHE_KEY, 300, fn () => $this->service->allForView());
 
             return response()->json([
                 'success' => true,
@@ -62,6 +65,7 @@ class UnitController extends Controller
     {
         try {
             $unit = $this->service->store($request->validated());
+            Cache::forget(UNITS_LIST_CACHE_KEY);
 
             return response()->json([
                 'success' => true,
@@ -77,6 +81,7 @@ class UnitController extends Controller
     {
         try {
             $unit = $this->service->update((int) $id, $request->validated());
+            Cache::forget(UNITS_LIST_CACHE_KEY);
 
             return response()->json([
                 'success' => true,
@@ -92,6 +97,7 @@ class UnitController extends Controller
     {
         try {
             $this->service->delete((int) $id);
+            Cache::forget(UNITS_LIST_CACHE_KEY);
 
             return response()->json([
                 'success' => true,
@@ -106,6 +112,7 @@ class UnitController extends Controller
     {
         try {
             $unit = $this->service->toggleStatus((int) $id);
+            Cache::forget(UNITS_LIST_CACHE_KEY);
 
             $statusText = $unit->is_active ? 'تم التفعيل' : 'تم التعطيل';
 
