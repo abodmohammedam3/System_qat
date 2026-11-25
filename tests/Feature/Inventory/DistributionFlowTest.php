@@ -302,4 +302,90 @@ class DistributionFlowTest extends TestCase
         $this->assertEqualsWithDelta(10.0, $ledger['totals']['in_qty'], 0.0001);
         $this->assertEqualsWithDelta(4.0, $ledger['totals']['out_qty'], 0.0001);
     }
+
+    public function test_distribution_unit_conversion_with_conversion_factor_and_piece_weight(): void
+    {
+        $kiloUnitId = DB::table('units')->insertGetId([
+            'UnitName'          => 'كيلو',
+            'conversion_factor' => 1000,
+            'is_active'         => 1,
+        ]);
+        $boxUnitId = DB::table('units')->insertGetId([
+            'UnitName'          => 'علبة',
+            'conversion_factor' => 250,
+            'is_active'         => 1,
+        ]);
+
+        // شراء 10 كيلو بسعر 100 للكيلو
+        $this->postJson(route('invoicesPurch.store'), [
+            'invoice_number' => 'PINV-CONV-001',
+            'invoice_date'   => '2026-11-25',
+            'account_id'     => $this->supplierAccountId,
+            'warehouse_id'   => $this->warehouseId,
+            'coin_id'        => $this->currencyId,
+            'exchange_rate'  => 1,
+            'payment_method' => 1,
+            'details'        => [
+                [
+                    'item_id'  => $this->itemId,
+                    'unit_id'  => $kiloUnitId,
+                    'quantity' => 10,
+                    'price'    => 100,
+                    'discount' => 0,
+                ],
+            ],
+        ])->assertStatus(201);
+
+        $purchaseDetail = InventoryMovementDetail::query()
+            ->where('item_id', $this->itemId)
+            ->where('unit_id', $kiloUnitId)
+            ->orderByDesc('movement_detail_id')
+            ->firstOrFail();
+
+        // توزيع: 2 علبة (2 * 250 / 1000 = 0.5 كيلو) + 3 حبة بوزن 500 جم (3 * 500 / 1000 = 1.5 كيلو)
+        $distRes = $this->postJson(route('purchases.distribution.save'), [
+            'distribution_date' => '2026-11-25',
+            'details'           => [
+                [
+                    'movement_detail_id' => $purchaseDetail->movement_detail_id,
+                    'customer_id'        => $this->customerId,
+                    'type_id'            => $this->typeId,
+                    'unit_id'            => $boxUnitId,
+                    'quantity'           => 2,
+                    'sale_price'         => 40,
+                ],
+                [
+                    'movement_detail_id' => $purchaseDetail->movement_detail_id,
+                    'customer_id'        => $this->customerId,
+                    'type_id'            => $this->typeId,
+                    'unit_id'            => $this->unitId, // حبة
+                    'unit_weight'        => 500,
+                    'quantity'           => 3,
+                    'sale_price'         => 75,
+                ],
+            ],
+        ])->assertOk()->assertJsonPath('success', true);
+
+        $distributionId = (int) $distRes->json('id');
+        $rows = DistributionDetail::where('distribution_id', $distributionId)->get()->keyBy('unit_id');
+
+        $boxRow = $rows->get($boxUnitId);
+        $this->assertNotNull($boxRow);
+        $this->assertEqualsWithDelta(0.5, (float) $boxRow->quantity_base, 0.0001);
+        $this->assertEqualsWithDelta(25.0, (float) $boxRow->unit_cost, 0.0001);
+
+        $pieceRow = $rows->get($this->unitId);
+        $this->assertNotNull($pieceRow);
+        $this->assertEqualsWithDelta(1.5, (float) $pieceRow->quantity_base, 0.0001);
+        $this->assertEqualsWithDelta(500.0, (float) $pieceRow->unit_weight, 0.0001);
+        $this->assertEqualsWithDelta(50.0, (float) $pieceRow->unit_cost, 0.0001);
+
+        // الرصيد المتبقي بالكيلو: 10 - (0.5 + 1.5) = 8.0
+        $available = app(InventoryService::class)->availableQuantity(
+            $this->itemId,
+            $this->warehouseId,
+            $kiloUnitId
+        );
+        $this->assertEqualsWithDelta(8.0, $available, 0.0001);
+    }
 }

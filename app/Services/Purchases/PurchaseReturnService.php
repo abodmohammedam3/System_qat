@@ -1200,7 +1200,8 @@ class PurchaseReturnService
                 'purchase_return_id'         => $purchaseReturn->purchase_return_id,
                 'purchase_invoice_detail_id' => $invoiceDetailId,
                 'item_id'                    => $invoiceDetail->item_id,
-                'type_id'                    => $invoiceDetail->type_id,
+                // حُذف type_id من purchase_invoice_details — النوع يُحدَّد لاحقاً في نافذة التوزيع فقط
+                'type_id'                    => null,
                 'unit_id'                    => $unitId,
                 'warehouse_id'               => $purchaseReturn->warehouse_id,
                 'code'                       => $invoiceDetail->code,
@@ -1260,9 +1261,6 @@ class PurchaseReturnService
             ->where('inventory_movements.source_type', InventoryMovement::SOURCE_PURCHASE_INVOICE)
             ->where('inventory_movements.source_id', $invoiceDetail->purchase_invoice_id)
             ->where('inventory_movement_details.item_id', $invoiceDetail->item_id)
-            ->when($invoiceDetail->type_id, function ($q) use ($invoiceDetail) {
-                $q->where('inventory_movement_details.type_id', $invoiceDetail->type_id);
-            })
             ->when($invoiceDetail->unit_id, function ($q) use ($invoiceDetail) {
                 $q->where('inventory_movement_details.unit_id', $invoiceDetail->unit_id);
             })
