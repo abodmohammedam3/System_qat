@@ -683,7 +683,7 @@ class InventoryMovementController extends Controller
                 'imd.item_id', 'imd.type_id', 'imd.warehouse_id', 'imd.unit_id', 'imd.supplier_account_id',
                 'ca.accName as supplier_name',
                 DB::raw("SUM(CASE WHEN im.direction = 'in' THEN imd.quantity ELSE 0 END) as total_in"),
-                DB::raw("SUM(CASE WHEN im.direction = 'out' THEN imd.quantity ELSE 0 END) as total_out"),
+                DB::raw("SUM(CASE WHEN im.direction = 'out' AND im.movement_type != '" . InventoryMovement::TYPE_SALE_DISTRIBUTION . "' THEN imd.quantity ELSE 0 END) as total_out"),
                 DB::raw("(
                     SELECT im2.document_number
                     FROM inventory_movement_details imd2

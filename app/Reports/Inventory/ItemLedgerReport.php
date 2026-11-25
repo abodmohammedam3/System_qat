@@ -122,7 +122,7 @@ class ItemLedgerReport implements Report
         $totalsRow = (clone $query)->toBase()
             ->cloneWithout(['columns'])
             ->selectRaw("COALESCE(SUM(CASE WHEN im.direction = 'in'  THEN inventory_movement_details.quantity ELSE 0 END), 0) as in_qty")
-            ->selectRaw("COALESCE(SUM(CASE WHEN im.direction = 'out' THEN inventory_movement_details.quantity ELSE 0 END), 0) as out_qty")
+            ->selectRaw("COALESCE(SUM(CASE WHEN im.direction = 'out' AND im.movement_type != ? THEN inventory_movement_details.quantity ELSE 0 END), 0) as out_qty", [InventoryMovement::TYPE_SALE_DISTRIBUTION])
             ->selectRaw('COALESCE(SUM(inventory_movement_details.total), 0) as total')
             ->first();
 
@@ -152,12 +152,15 @@ class ItemLedgerReport implements Report
             InventoryMovement::TYPE_SALE_RETURN     => 'مرتجع بيع',
             InventoryMovement::TYPE_SORTING_OUT     => 'فرز (خروج)',
             InventoryMovement::TYPE_SORTING_IN      => 'فرز (دخول)',
+            InventoryMovement::TYPE_DISTRIBUTION    => 'توزيع',
+            InventoryMovement::TYPE_SALE_DISTRIBUTION => 'بيع توزيع (توثيقي)',
         ];
 
         $rows = [];
 
         foreach ($details as $d) {
             $direction = $d->direction === 'in' ? 'in' : 'out';
+            $isDocumentary = $d->movement_type === InventoryMovement::TYPE_SALE_DISTRIBUTION;
             $qty = (float) $d->quantity;
 
             $rows[] = [
@@ -170,7 +173,7 @@ class ItemLedgerReport implements Report
                 'movement_type' => $typeLabels[$d->movement_type] ?? $d->movement_type,
                 'statement'     => $d->statement ?? '',
                 'in_qty'        => $direction === 'in' ? $qty : 0,
-                'out_qty'       => $direction === 'out' ? $qty : 0,
+                'out_qty'       => ($direction === 'out' && !$isDocumentary) ? $qty : 0,
                 'unit_cost'     => (float) $d->unit_cost,
                 'total'         => (float) $d->total,
             ];

@@ -195,12 +195,16 @@ class TypesCrudTest extends TestCase
     {
         $type = Type::create(['name' => 'مستخدم']);
 
-        // صف تفاصيل يتيم يستخدم النوع — مع تعطيل فحوصات FK مؤقتاً
+        // صف تفاصيل توزيع يتيم يستخدم النوع — مع تعطيل فحوصات FK مؤقتاً
         // (فحص الخدمة يعتمد على وجود type_id فقط)
         DB::statement('SET foreign_key_checks = 0');
-        DB::table('purchase_invoice_details')->insert([
+        DB::table('distribution_details')->insert([
+            'distribution_id'     => 999999,
             'purchase_invoice_id' => 999999,
-            'type_id' => $type->id,
+            'movement_id'         => 999999,
+            'movement_detail_id'  => 999999,
+            'customer_id'         => 999999,
+            'type_id'             => $type->id,
         ]);
         DB::statement('SET foreign_key_checks = 1');
 
@@ -208,7 +212,7 @@ class TypesCrudTest extends TestCase
 
         $response->assertStatus(422)->assertJsonPath('success', false);
         $this->assertStringContainsString(
-            'مستخدم في فواتير الشراء',
+            'مستخدم في نافذة التوزيع',
             (string) $response->json('message')
         );
 

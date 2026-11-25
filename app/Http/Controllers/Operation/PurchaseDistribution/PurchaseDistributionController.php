@@ -752,6 +752,7 @@ class PurchaseDistributionController extends Controller
             }
 
             if (!$nextLevel) {
+                $pending = [];
                 break;
             }
 
@@ -1387,18 +1388,13 @@ class PurchaseDistributionController extends Controller
                     'payment_method'        => $paymentMethod,
                     'statement'             => $validated['statement'] ?? null,
                     'reference'             => $validated['reference'] ?? null,
-                    'details'               => $items,
-                    'skip_stock_validation' => true,
+                    'details'                 => $items,
+                    'skip_stock_validation'   => true,
+                    'distribution_detail_ids' => $details->pluck('id')->all(),
                 ];
 
                 /** @var SalesInvoice $invoice */
                 $invoice = app(SalesInvoiceService::class)->create($data);
-
-                DistributionDetail::whereIn('id', $details->pluck('id'))
-                    ->update([
-                        'sales_invoice_id' => $invoice->sales_invoice_id,
-                        'invoiced_at'      => now(),
-                    ]);
 
                 foreach ($distributionIds as $distId) {
                     $remaining = DistributionDetail::where('distribution_id', $distId)
