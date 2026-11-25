@@ -14,7 +14,7 @@ class UnitUpdateRequest extends FormRequest
 {
     public function authorize(): bool
     {
-        // شبكة أمان فقط — الصلاحيات المخططة (config/permissions.php) تُفعَّل لاحقاً
+        // شبكة أمان فقط — الصلاحيات المخططة (config/permissions.php) تُفعّل لاحقاً
         return true;
     }
 
@@ -30,6 +30,7 @@ class UnitUpdateRequest extends FormRequest
                 'max:255',
                 Rule::unique('units', 'UnitName')->ignore($unitId, 'UnitID'),
             ],
+            'conversion_factor' => ['nullable', 'numeric', 'min:0', 'max:9999999999'],
         ];
     }
 

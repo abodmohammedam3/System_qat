@@ -17,7 +17,7 @@ use Illuminate\Support\Facades\Log;
  * خدمة وحدات القياس — نموذج الوحدة 1 (المعيار للوحدات القادمة).
  *
  * القواعد المطبقة: Cache::lock + DB::transaction + RuntimeException + Log::error
- * منع الحذف الناعم: وحدة مستخدمة في أي مستند/حركة لا تُحذف، تُعطَّل بدل ذلك.
+ * منع الحذف الناعم: وحدة مستخدمة في أي مستند/حركة لا تُحذف، تُعطّل بدل ذلك.
  */
 class UnitService
 {
@@ -71,6 +71,9 @@ class UnitService
             return DB::transaction(function () use ($data) {
                 $unit = Unit::create([
                     'UnitName'   => $data['UnitName'],
+                    'conversion_factor' => isset($data['conversion_factor']) && (float) $data['conversion_factor'] > 0
+                        ? (float) $data['conversion_factor']
+                        : 1,
                     'is_active'  => 1,
                     'created_by' => auth()->id(),
                     'updated_by' => auth()->id(),
@@ -91,6 +94,9 @@ class UnitService
 
                 $unit->update([
                     'UnitName'   => $data['UnitName'],
+                    'conversion_factor' => isset($data['conversion_factor']) && (float) $data['conversion_factor'] > 0
+                        ? (float) $data['conversion_factor']
+                        : 1,
                     'updated_by' => auth()->id(),
                 ]);
 

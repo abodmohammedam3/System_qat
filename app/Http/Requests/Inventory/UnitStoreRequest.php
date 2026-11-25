@@ -16,7 +16,7 @@ class UnitStoreRequest extends FormRequest
 {
     public function authorize(): bool
     {
-        // شبكة أمان فقط — الصلاحيات المخططة (config/permissions.php) تُفعَّل لاحقاً
+        // شبكة أمان فقط — الصلاحيات المخططة (config/permissions.php) تُفعّل لاحقاً
         return true;
     }
 
@@ -24,6 +24,7 @@ class UnitStoreRequest extends FormRequest
     {
         return [
             'UnitName' => ['required', 'string', 'max:255', 'unique:units,UnitName'],
+            'conversion_factor' => ['nullable', 'numeric', 'min:0', 'max:9999999999'],
         ];
     }
 

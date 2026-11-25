@@ -16,6 +16,15 @@
                         <label for="unitName" class="form-label">اسم الوحدة <span class="text-danger">*</span></label>
                         <input type="text" class="form-control" id="unitName" required>
                     </div>
+                    <div class="mb-3">
+                        <label for="unitConversionFactor" class="form-label">
+                            معامل التحويل — عدد الجرامات في الوحدة الواحدة
+                        </label>
+                        <input type="number" step="0.0001" min="0" class="form-control" id="unitConversionFactor" value="1" dir="ltr">
+                        <div class="form-text">
+                            جرام = 1، كيلو = 1000. وحدات الحبة تُترك = 1 — وزن الحبة يُدخل عند التوزيع.
+                        </div>
+                    </div>
                 </form>
             </div>
             <div class="modal-footer">
