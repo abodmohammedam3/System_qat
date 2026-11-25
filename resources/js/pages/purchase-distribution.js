@@ -55,16 +55,33 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     /**
+     * وزن الوحدة بالجرام — نفس منهج الخادم (unitFactorGrams في
+     * PurchaseDistributionController): كيلو=1000، جرام=1،
+     * غير ذلك = conversion_factor المخزن في شاشة الوحدات.
+     * الحبة تعالج في مسارها الخاص (تحتاج وزن الحبة) ← null.
+     */
+    const unitGrams = (unitId) => {
+        const u = (state.unitsCache || []).find(x => String(x.UnitID) === String(unitId));
+        if (!u) return null;
+        const name = u.UnitName;
+        if (isPieceUnitName(name)) return null;
+        if (isKiloUnitName(name)) return 1000;
+        if (isGramUnitName(name)) return 1;
+        const f = parseFloat(u.conversion_factor);
+        return f > 0 ? f : null;
+    };
+
+    /**
      * معامل التحويل من الوحدة "from" إلى الوحدة "to" (بالكمية).
-     * كيلو↔جرام فقط.
+     * كيلو↔جرام كما كانت، وأي وحدة أخرى عبر conversion_factor —
+     * مطابقة للتحويل الخادمي (grams من ÷ grams إلى).
      */
     function unitFactor(fromId, toId) {
         if (String(fromId) === String(toId)) return 1;
-        const fn = unitNameById(fromId);
-        const tn = unitNameById(toId);
-        if (isKiloUnitName(fn) && isGramUnitName(tn)) return 1000;   // كيلو → جرام
-        if (isGramUnitName(fn) && isKiloUnitName(tn)) return 0.001;  // جرام → كيلو
-        return null;
+        const gf = unitGrams(fromId);
+        const gt = unitGrams(toId);
+        if (gf === null || gt === null || gt <= 0) return null;
+        return gf / gt;
     }
 
     const isPieceUnitId = (unitId) => isPieceUnitName(unitNameById(unitId));
@@ -1155,10 +1172,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 const meta = state.pieceMeta[itemId]?.[custId] || {};
                 const wKg = num(meta.weight);
                 if (wKg > 0) {
-                    const batchName = item.unit_name || '';
+                    const batchName = unitNameById(batch) || item.unit_name || '';
                     let w = wKg;
                     if (isGramUnitName(batchName)) w = wKg * 1000;
-                    else if (!isKiloUnitName(batchName)) w = 0;
+                    else if (!isKiloUnitName(batchName)) {
+                        const g = unitGrams(batch);
+                        w = (g !== null && g > 0) ? (wKg * 1000) / g : 0;
+                    }
                     price = w > 0 ? price / w : 0;
                 } else {
                     price = 0;
@@ -1211,12 +1231,13 @@ document.addEventListener('DOMContentLoaded', () => {
         return f === null ? qtyEntered : qtyEntered * f;
     }
 
-    /** تحويل وزن بالكيلو إلى وحدة الدفعة (كيلو → كيلو = نفسه، كيلو → جرام = ×1000) */
+    /** تحويل وزن بالكيلو إلى وحدة الدفعة (كيلو→كيلو نفسه، كيلو→جرام ×1000، وحدة مخصصة ÷ المعامل) */
     function kgToBatchUnit(kg, batch, item) {
-        const batchName = item.unit_name || '';
+        const batchName = unitNameById(batch) || item.unit_name || '';
         if (isKiloUnitName(batchName)) return kg;
         if (isGramUnitName(batchName)) return kg * 1000;
-        return kg;
+        const g = unitGrams(batch);
+        return (g !== null && g > 0) ? (kg * 1000) / g : kg;
     }
 
     /** تحويل السعر المخزن (بوحدة الدفعة) إلى السعر المعروض بالوحدة المختارة */
@@ -1230,10 +1251,15 @@ document.addEventListener('DOMContentLoaded', () => {
             const meta = state.pieceMeta[itemId]?.[custId] || {};
             const wKg = num(meta.weight);
             if (wKg > 0) {
-                const batchName = item.unit_name || '';
-                let weightInBatch = wKg;
+                const batchName = unitNameById(batch) || item.unit_name || '';
+                let weightInBatch;
                 if (isGramUnitName(batchName)) weightInBatch = wKg * 1000;
-                else if (!isKiloUnitName(batchName)) return batchPrice;
+                else if (isKiloUnitName(batchName)) weightInBatch = wKg;
+                else {
+                    const g = unitGrams(batch);
+                    if (g === null || g <= 0) return batchPrice;
+                    weightInBatch = (wKg * 1000) / g;
+                }
                 return batchPrice * weightInBatch;
             }
             return 0;
@@ -1256,10 +1282,14 @@ document.addEventListener('DOMContentLoaded', () => {
             const meta = state.pieceMeta[itemId]?.[custId] || {};
             const wKg = num(meta.weight);
             if (wKg <= 0) return 0;
-            const batchName = item.unit_name || '';
+            const batchName = unitNameById(batch) || item.unit_name || '';
             let w = wKg;
             if (isGramUnitName(batchName)) w = wKg * 1000;
-            else if (!isKiloUnitName(batchName)) return batchPrice;
+            else if (!isKiloUnitName(batchName)) {
+                const g = unitGrams(batch);
+                if (g === null || g <= 0) return batchPrice;
+                w = (wKg * 1000) / g;
+            }
             return batchPrice * w;
         }
         const f = unitFactor(batch, unitId);
