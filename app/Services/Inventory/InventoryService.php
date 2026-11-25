@@ -59,6 +59,8 @@ class InventoryService
     // ملاحظة مهمة: حركات "بيع توزيع" (sale_distribution) توثيقية
     // فقط — البضاعة خرجت فعلياً من المخزن عبر حركة "توزيع" عند
     // حفظ التوزيع، لذلك تُستثنى من مجموع الخروج لتفادي الخصم المزدوج.
+    // الاستثناء مركزي في scopeRealOutflow على InventoryMovementDetail —
+    // أي استعلام خروج جديد يجب أن يمر عبره.
     // =====================================================
     public function availableQuantity(int $itemId, int $warehouseId, ?int $unitId = null): float
     {
@@ -75,8 +77,7 @@ class InventoryService
             ->where('inventory_movement_details.item_id', $itemId)
             ->where('inventory_movement_details.warehouse_id', $warehouseId)
             ->when($unitId !== null, fn($q) => $q->where('inventory_movement_details.unit_id', $unitId))
-            ->where('inventory_movements.direction', 'out')
-            ->where('inventory_movements.movement_type', '!=', InventoryMovement::TYPE_SALE_DISTRIBUTION)
+            ->realOutflow()
             ->sum('inventory_movement_details.quantity');
 
         return (float) $in - (float) $out;
@@ -112,8 +113,7 @@ class InventoryService
                 fn($q) => $q->whereNull('inventory_movement_details.supplier_account_id'),
                 fn($q) => $q->where('inventory_movement_details.supplier_account_id', $supplierAccountId)
             )
-            ->where('inventory_movements.direction', 'out')
-            ->where('inventory_movements.movement_type', '!=', InventoryMovement::TYPE_SALE_DISTRIBUTION)
+            ->realOutflow()
             ->sum('inventory_movement_details.quantity');
 
         return (float) $in - (float) $out;

@@ -39,6 +39,28 @@ class InventoryMovementDetail extends Model
     ];
 
     // ============================================
+    // النطاقات (Scopes)
+    // ============================================
+
+    /**
+     * مجموع الخروج "الحقيقي" من المخزون.
+     *
+     * حركة "بيع توزيع" (sale_distribution) توثيقية فقط — البضاعة خرجت
+     * فعلياً عبر حركة "توزيع" عند حفظ التوزيع — لذلك تُستثنى من أي تجميع
+     * خروج لتفادي الخصم المزدوج.
+     *
+     * ⚠️ أي استعلام مستقبلي يجمع كميات الخروج يجب أن يمر عبر هذا النطاق
+     * (أو يستثنى sale_distribution يدوياً) وإلا ستتضخم الأرصدة والتقارير.
+     * يتطلب join مع inventory_movements (بأسماء الأعمدة المؤهلة).
+     */
+    public function scopeRealOutflow($query)
+    {
+        return $query
+            ->where('inventory_movements.direction', 'out')
+            ->where('inventory_movements.movement_type', '!=', InventoryMovement::TYPE_SALE_DISTRIBUTION);
+    }
+
+    // ============================================
     // العلاقات
     // ============================================
 
