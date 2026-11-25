@@ -28,7 +28,9 @@ document.addEventListener('DOMContentLoaded', () => {
         prices: {},
         units: {},   // الوحدة المختارة لكل (دفعة، عميل) — القيمة = UnitID وحدة الدفعة افتراضيًا
         pieceMeta: {},   // بيانات حقل الوزن (عدد الحبات × وزن الحبة) لكل (دفعة، عميل) — للعرض فقط
+        types: {},   // النوع المختار لكل (دفعة، عميل) — إلزامي من شاشة الأنواع
         unitsCache: null, // كاش وحدات القياس من /setting/inventory/units/list?full=1
+        typesCache: null, // كاش أنواع الأصناف من /setting/inventory/types/list?full=1
         modalItemId: null,
         modalInvoiceId: null,
     };
@@ -80,6 +82,21 @@ document.addEventListener('DOMContentLoaded', () => {
             state.unitsCache = [];
         }
         return state.unitsCache;
+    }
+
+    /** جلب أنواع الأصناف مرة واحدة (عمود النوع في نافذة التوزيع إلزامي) */
+    async function ensureTypesCache() {
+        if (state.typesCache) return state.typesCache;
+        try {
+            const res = await fetch('/setting/inventory/types/list?full=1', {
+                headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+            });
+            const json = await res.json();
+            state.typesCache = Array.isArray(json.data) ? json.data : [];
+        } catch (e) {
+            state.typesCache = [];
+        }
+        return state.typesCache;
     }
 
     /** الوحدة الافتراضية (المرجعية) للدفعة = وحدة الصنف في فاتورة الشراء */
@@ -235,6 +252,7 @@ document.addEventListener('DOMContentLoaded', () => {
             delete state.prices[itemId];
             delete state.units[itemId];
             delete state.pieceMeta[itemId];
+            delete state.types[itemId];
         }
         pruneOrphanCustomers();
         return removedCount;
@@ -402,6 +420,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 delete state.prices[mdId];
                 delete state.units[mdId];
                 delete state.pieceMeta[mdId];
+                delete state.types[mdId];
             }
         });
         pruneOrphanCustomers();
@@ -682,6 +701,23 @@ document.addEventListener('DOMContentLoaded', () => {
         return Object.values(row).reduce((s, q) => s + num(q), 0);
     }
 
+    /** الكمية المعروضة بالوحدة المختارة (المخزّن داخليًا بوحدة الدفعة) */
+    function displayQtyFor(itemId, custId, item) {
+        const storedQty = num((state.allocation[itemId] || {})[custId]);
+        const unitId = chosenUnitId(itemId, custId, item);
+        const batch = batchUnitId(item);
+
+        if (unitId === null || batch === null || String(unitId) === String(batch)) return storedQty;
+
+        if (isPieceUnitId(unitId)) {
+            const meta = state.pieceMeta[itemId]?.[custId] || {};
+            return num(meta.count) || 0;
+        }
+
+        const f = unitFactor(batch, unitId);
+        return (f !== null && f > 0) ? storedQty * f : storedQty;
+    }
+
     function renderAllocationModal() {
         const itemId = state.modalItemId;
         const item = findItem(itemId);
@@ -716,7 +752,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (!customerIds.length) {
             tbody.innerHTML = `
-                <tr><td colspan="7" class="text-center text-muted py-3 small">
+                <tr><td colspan="8" class="text-center text-muted py-3 small">
                     <i class="bi bi-person-plus fs-4 d-block mb-1 opacity-50"></i>
                     أضف عميلًا لتوزيع الكميات.
                 </td></tr>`;
@@ -730,17 +766,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const unitId = chosenUnitId(itemId, cid, item);
             const batch = batchUnitId(item);
-
-            let curQty = storedQty;
-            if (unitId !== null && batch !== null && String(unitId) !== String(batch)) {
-                if (isPieceUnitId(unitId)) {
-                    const meta = state.pieceMeta[itemId]?.[cid] || {};
-                    curQty = num(meta.count) || 0;
-                } else {
-                    const f = unitFactor(batch, unitId);
-                    if (f !== null && f > 0) { curQty = storedQty * f; }
-                }
-            }
+            const curQty = displayQtyFor(itemId, cid, item);
 
             const curPrice = displayPriceFor(itemId, cid, item);
             const curTotal = curQty * curPrice;
@@ -761,6 +787,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 .join('');
 
             const pieceUnitSelected = curUnit !== null && isPieceUnitId(curUnit);
+
+            // عمود النوع — إلزامي من شاشة الأنواع
+            const curType = state.types[itemId]?.[cid] ?? '';
+            const typeList = state.typesCache || [];
+            const typeOptions = typeList.length === 0
+                ? '<option value="">جارٍ تحميل الأنواع…</option>'
+                : '<option value="">اختر النوع</option>' + typeList
+                    .filter(t => parseInt(t.is_active, 10) === 1 || String(t.id) === String(curType))
+                    .map(t => `<option value="${escapeHtml(String(t.id))}" ${String(t.id) === String(curType) ? 'selected' : ''}>${escapeHtml(t.name || '')}</option>`)
+                    .join('');
 
             // إصلاح التصميم المضغوط: استخدام flex-column
             const pieceBlock = pieceUnitSelected ? `
@@ -786,6 +822,11 @@ document.addEventListener('DOMContentLoaded', () => {
                         ${isEmpty ? '<i class="bi bi-exclamation-circle-fill text-danger ms-1" title="لم تُدخل كمية"></i>' : ''}
                     </div>
                     ${info.phone ? `<div class="text-muted" style="font-size:0.7rem;">${escapeHtml(info.phone)}</div>` : ''}
+                </td>
+                <td class="text-center">
+                    <select class="form-select form-select-sm alloc-type-input ${curType ? '' : 'border-danger'}" data-customer="${cid}" ${editable ? '' : 'disabled'}>
+                        ${typeOptions}
+                    </select>
                 </td>
                 <td class="text-center">
                     <select class="form-select form-select-sm alloc-unit-input" data-customer="${cid}" ${editable ? '' : 'disabled'}>
@@ -911,6 +952,11 @@ document.addEventListener('DOMContentLoaded', () => {
             sel.addEventListener('change', () => handleUnitChange(sel));
         });
 
+        tbody.querySelectorAll('.alloc-type-input').forEach(sel => {
+            if (sel.disabled) return;
+            sel.addEventListener('change', () => handleTypeChange(sel));
+        });
+
         tbody.querySelectorAll('.piece-count-input').forEach(inp => {
             if (inp.readOnly) return;
             inp.addEventListener('input', () => handlePieceInput(inp, 'count'));
@@ -938,12 +984,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (state.prices[itemId]) delete state.prices[itemId][cid];
                 if (state.units[itemId]) delete state.units[itemId][cid];
                 if (state.pieceMeta[itemId]) delete state.pieceMeta[itemId][cid];
+                if (state.types[itemId]) delete state.types[itemId][cid];
 
                 if (Object.keys(state.allocation[itemId] || {}).length === 0) {
                     delete state.allocation[itemId];
                     delete state.prices[itemId];
                     delete state.units[itemId];
                     delete state.pieceMeta[itemId];
+                    delete state.types[itemId];
                 }
 
                 pruneOrphanCustomers();
@@ -1273,6 +1321,15 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         renderAllocationModal();
+    }
+
+    /** تغيير النوع في نافذة التوزيع — إلزامي */
+    function handleTypeChange(sel) {
+        const itemId = state.modalItemId;
+        const custId = sel.dataset.customer;
+        state.types[itemId] = state.types[itemId] || {};
+        state.types[itemId][custId] = sel.value ? parseInt(sel.value, 10) : null;
+        sel.classList.toggle('border-danger', !sel.value);
     }
 
     function handlePieceInput(input, kind) {
@@ -1754,24 +1811,52 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
+        // تأكد من توفر قوائم الوحدات والأنواع قبل البناء
+        await ensureUnitsCache();
+        await ensureTypesCache();
+
+        const errors = [];
         const details = [];
         Object.entries(state.allocation).forEach(([mdId, row]) => {
             const item = findItem(mdId);
             if (!item) return;
+            const batch = batchUnitId(item);
             Object.entries(row).forEach(([custId, qty]) => {
-                if (num(qty) > 0) {
-                    const price = state.prices[mdId]?.[custId] ?? num(item.sale_price);
-                    details.push({
-                        movement_detail_id: parseInt(mdId, 10),
-                        purchase_invoice_id: parseInt(item.purchase_invoice_id, 10),
-                        movement_id: parseInt(item.movement_id, 10),
-                        customer_id: parseInt(custId, 10),
-                        quantity: num(qty),
-                        sale_price: num(price),
-                    });
+                if (num(qty) <= 0) return;
+
+                const unitId = chosenUnitId(mdId, custId, item);
+                const typeId = state.types[mdId]?.[custId];
+                const meta = state.pieceMeta[mdId]?.[custId] || {};
+                const isPiece = unitId !== null && isPieceUnitId(unitId);
+                const custName = state.customerInfo[custId]?.name || `#${custId}`;
+                const label = `«${item.item_name}» للعميل «${custName}»`;
+
+                if (!typeId) errors.push(`${label}: النوع إلزامي.`);
+                if (unitId === null) errors.push(`${label}: الوحدة مطلوبة.`);
+                if (isPiece && batch !== null && String(unitId) !== String(batch) && !(num(meta.weight) > 0)) {
+                    errors.push(`${label}: وزن الحبة بالجرام إلزامي عند اختيار وحدة «حبة».`);
                 }
+
+                details.push({
+                    movement_detail_id: parseInt(mdId, 10),
+                    purchase_invoice_id: parseInt(item.purchase_invoice_id, 10),
+                    movement_id: parseInt(item.movement_id, 10),
+                    customer_id: parseInt(custId, 10),
+                    // النوع والوحدة ووزن الحبة (بالجرام) — أعمدة خادمية حقيقية
+                    type_id: typeId ? parseInt(typeId, 10) : null,
+                    unit_id: unitId !== null ? parseInt(String(unitId), 10) : null,
+                    unit_weight: isPiece ? num(meta.weight) * 1000 : null,
+                    // الكمية والسعر بالوحدة المختارة — الخادم يحوّل إلى وحدة الدفعة
+                    quantity: displayQtyFor(mdId, custId, item),
+                    sale_price: displayPriceFor(mdId, custId, item),
+                });
             });
         });
+
+        if (errors.length) {
+            toastError(errors.slice(0, 3).join(' ') + (errors.length > 3 ? ` (+${errors.length - 3} أخطاء أخرى)` : ''));
+            return;
+        }
 
         if (!details.length) {
             toastError('لا توجد كميات موزعة للحفظ.');
@@ -1782,8 +1867,6 @@ document.addEventListener('DOMContentLoaded', () => {
             id:                state.distributionId,
             distribution_date: $('distributionDate')?.value,
             notes:             $('distributionNotes')?.value || null,
-            units:             state.units,
-            piece_meta:        state.pieceMeta,
             details,
         };
 
@@ -1821,6 +1904,7 @@ document.addEventListener('DOMContentLoaded', () => {
             state.prices = {};
             state.units = {};
             state.pieceMeta = {};
+            state.types = {};
             state.modalItemId = null;
             state.modalInvoiceId = null;
 
@@ -1829,12 +1913,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if ($('distributionDate')) $('distributionDate').value = res.header.distribution_date || '';
             if ($('distributionNotes')) $('distributionNotes').value = res.header.notes || '';
 
-            if (res.header.unit_meta?.units) {
-                state.units = res.header.unit_meta.units;
-            }
-            if (res.header.unit_meta?.piece_meta) {
-                state.pieceMeta = res.header.unit_meta.piece_meta;
-            }
+            // البيانات (النوع/الوحدة/وزن الحبة) تُسترجع من أعمدة الصفوف مباشرة
 
             const invoiceIds = [...new Set((res.details || []).map(d => d.purchase_invoice_id).filter(Boolean))];
             for (const invId of invoiceIds) {
@@ -1861,22 +1940,43 @@ document.addEventListener('DOMContentLoaded', () => {
                     phone: d.customer_phone || '',
                     code: d.customer_code || '',
                 };
-                state.allocation[d.movement_detail_id] = state.allocation[d.movement_detail_id] || {};
-                state.allocation[d.movement_detail_id][d.customer_id] = num(d.quantity);
-
-                state.prices[d.movement_detail_id] = state.prices[d.movement_detail_id] || {};
-                state.prices[d.movement_detail_id][d.customer_id] = num(d.sale_price);
 
                 const item = findItem(d.movement_detail_id);
-                if (item && item.unit_id != null) {
+                const batch = item ? batchUnitId(item) : null;
+                const chosen = d.unit_id ?? batch;
+                const isPieceRow = chosen !== null && isPieceUnitId(chosen);
+                // الكمية الداخلية تُخزّن بوحدة الدفعة دائمًا (quantity_base)
+                const baseQty = num(d.quantity_base) > 0 ? num(d.quantity_base) : num(d.quantity);
+
+                state.allocation[d.movement_detail_id] = state.allocation[d.movement_detail_id] || {};
+                state.allocation[d.movement_detail_id][d.customer_id] = baseQty;
+
+                // السعر الداخلي بوحدة الدفعة = الإجمالي ÷ الكمية الأساسية
+                const totalRow = num(d.quantity) * num(d.sale_price);
+                const batchPrice = baseQty > 0 ? totalRow / baseQty : num(d.sale_price);
+                state.prices[d.movement_detail_id] = state.prices[d.movement_detail_id] || {};
+                state.prices[d.movement_detail_id][d.customer_id] = batchPrice;
+
+                // النوع والوحدة ووزن الحبة من أعمدة الصف
+                if (d.type_id) {
+                    state.types[d.movement_detail_id] = state.types[d.movement_detail_id] || {};
+                    state.types[d.movement_detail_id][d.customer_id] = parseInt(d.type_id, 10);
+                }
+                if (chosen !== null) {
                     state.units[d.movement_detail_id] = state.units[d.movement_detail_id] || {};
-                    if (state.units[d.movement_detail_id][d.customer_id] === undefined) {
-                        state.units[d.movement_detail_id][d.customer_id] = item.unit_id;
-                    }
+                    state.units[d.movement_detail_id][d.customer_id] = chosen;
+                }
+                if (isPieceRow) {
+                    state.pieceMeta[d.movement_detail_id] = state.pieceMeta[d.movement_detail_id] || {};
+                    state.pieceMeta[d.movement_detail_id][d.customer_id] = {
+                        count: String(d.quantity),
+                        weight: num(d.unit_weight) > 0 ? String(num(d.unit_weight) / 1000) : '',
+                    };
                 }
             });
 
             await ensureUnitsCache();
+            await ensureTypesCache();
 
             pruneOrphanCustomers();
 
@@ -1915,6 +2015,7 @@ document.addEventListener('DOMContentLoaded', () => {
         state.prices = {};
         state.units = {};
         state.pieceMeta = {};
+        state.types = {};
         state.modalItemId = null;
         state.modalInvoiceId = null;
         updateModeBadge();
