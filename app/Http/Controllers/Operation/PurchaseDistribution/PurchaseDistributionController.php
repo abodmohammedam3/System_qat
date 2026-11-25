@@ -9,6 +9,7 @@ use App\Models\Purchases\Distribution;
 use App\Models\Purchases\DistributionDetail;
 use App\Models\Inventory\InventoryMovement;
 use App\Models\Inventory\InventoryMovementDetail;
+use App\Models\Inventory\Unit;
 use Illuminate\Support\Facades\Log;
 use App\Models\Inventory\Item;
 use App\Models\Customer;
@@ -287,13 +288,16 @@ class PurchaseDistributionController extends Controller
             'id'                => ['nullable', 'integer', 'exists:distributions,id'],
             'distribution_date' => ['required', 'date_format:Y-m-d'],
             'notes'             => ['nullable', 'string', 'max:2000'],
-            'units'             => ['nullable', 'array'],
-            'piece_meta'        => ['nullable', 'array'],
             'details'           => ['required', 'array', 'min:1'],
             'details.*.movement_detail_id' => ['required', 'integer', 'exists:inventory_movement_details,movement_detail_id'],
             'details.*.customer_id'        => ['required', 'integer', 'exists:customers,CustomersID'],
             'details.*.quantity'           => ['required', 'numeric', 'min:0.000001'],
             'details.*.sale_price'         => ['required', 'numeric', 'min:0'],
+            // نافذة التوزيع: النوع إلزامي، والوحدة افتراضها "حبة"
+            'details.*.type_id'            => ['required', 'integer', 'exists:type,id'],
+            'details.*.unit_id'            => ['required', 'integer', 'exists:units,UnitID'],
+            // وزن الحبة بالجرام — إلزامي عندما تكون الوحدة "حبة" والوحدات مختلفة
+            'details.*.unit_weight'        => ['nullable', 'numeric', 'gt:0'],
         ]);
 
         $isUpdate = ! empty($validated['id']);
@@ -315,26 +319,17 @@ class PurchaseDistributionController extends Controller
         }
 
         try {
+            // معرفات الدفعات المطلوبة (لأقفال الصفوف والتحقق من المتاح)
             $requested = [];
             foreach ($validated['details'] as $row) {
                 $mdId = (int) $row['movement_detail_id'];
-                $requested[$mdId] = ($requested[$mdId] ?? 0) + (float) $row['quantity'];
+                $requested[$mdId] = true;
             }
 
-            // تشفير وحدات القياس ووزن الحبة داخل حقل notes لتفادي إضافة أعمدة لقاعدة البيانات
-            $userNotes    = $validated['notes'] ?? null;
-            $unitsMeta    = $request->input('units');
-            $pieceMeta    = $request->input('piece_meta');
-            $notesToStore = $userNotes;
-            if (!empty($unitsMeta) || !empty($pieceMeta)) {
-                $notesToStore = json_encode([
-                    'text'       => $userNotes,
-                    '_unit_meta' => [
-                        'units'      => $unitsMeta ?: [],
-                        'piece_meta' => $pieceMeta ?: [],
-                    ],
-                ], JSON_UNESCAPED_UNICODE);
-            }
+            // ملاحظة: النوع والوحدة ووزن الحبة تُخزّن الآن في أعمدة حقيقية
+            // بجدول distribution_details (انظر التهجير 2026_11_25_000002)
+            // — لم نعد نشفرها داخل حقل notes.
+            $notesToStore = $validated['notes'] ?? null;
 
             return DB::transaction(function () use ($validated, $existing, $isUpdate, $requested, $notesToStore) {
                 // قفل صفوف تفاصيل حركات المخزون المعنية لمنع التضارب
@@ -344,16 +339,39 @@ class PurchaseDistributionController extends Controller
                     ->get()
                     ->keyBy('movement_detail_id');
 
+                // تحديد فاتورة الشراء الجذرية لكل الدفعات دفعةً واحدة (إصلاح N+1)
+                $rootMap = $this->resolveRootPurchaseInvoiceIds(array_keys($requested));
                 $rootInvoices = [];
-                foreach ($movementDetails as $mdId => $md) {
-                    $rootId = $this->resolveRootPurchaseInvoiceId($md);
+                foreach (array_keys($requested) as $mdId) {
+                    $rootId = $rootMap[$mdId] ?? null;
                     if ($rootId === null) {
-                        $itemName = $md->item?->itemName2 ?? "#{$mdId}";
+                        $md = $movementDetails->get($mdId);
+                        $itemName = $md?->item?->itemName2 ?? "#{$mdId}";
                         throw ValidationException::withMessages([
                             'details' => "الصنف «{$itemName}» ليس من فاتورة شراء (ولا من فرز مرتبط بفاتورة).",
                         ]);
                     }
                     $rootInvoices[$mdId] = $rootId;
+                }
+
+                // تحميل الوحدات المستخدمة دفعة واحدة (للتحويل الخادمي)
+                $unitIds = collect($validated['details'])->pluck('unit_id')
+                    ->merge($movementDetails->pluck('unit_id'))
+                    ->filter()->unique()->values();
+                $unitsById = Unit::whereIn('UnitID', $unitIds)->get()->keyBy('UnitID');
+
+                // تجهيز الصفوف: التحويل من الوحدة المختارة إلى وحدة الدفعة
+                // (bcmath بدقة 6 منازل — الحد السماح 0.000001)
+                $rowsPrepared = [];
+                $requestedBase = [];
+                foreach ($validated['details'] as $row) {
+                    $source = $movementDetails->get((int) $row['movement_detail_id']);
+                    $conv = $this->convertRowQuantity($source, $row, $unitsById);
+                    $conv['row'] = $row;
+                    $conv['source'] = $source;
+                    $rowsPrepared[] = $conv;
+                    $mdId = (int) $row['movement_detail_id'];
+                    $requestedBase[$mdId] = ($requestedBase[$mdId] ?? 0.0) + (float) $conv['quantity_base'];
                 }
 
                 $sortedOutQty = DB::table('inventory_movement_details as imd')
@@ -366,7 +384,7 @@ class PurchaseDistributionController extends Controller
                     ->toArray();
 
                 $query = DistributionDetail::query()
-                    ->select('movement_detail_id', DB::raw('SUM(quantity) as total'))
+                    ->select('movement_detail_id', DB::raw('SUM(quantity_base) as total'))
                     ->whereIn('movement_detail_id', array_keys($requested))
                     ->whereHas('distribution')
                     ->lockForUpdate();
@@ -381,7 +399,7 @@ class PurchaseDistributionController extends Controller
                     ? $existing->details()->whereNotNull('sales_invoice_id')->get()
                     : collect();
 
-                foreach ($requested as $mdId => $qty) {
+                foreach ($requestedBase as $mdId => $qtyBaseTotal) {
                     $source = $movementDetails->get($mdId);
                     if (! $source) {
                         throw ValidationException::withMessages([
@@ -389,17 +407,17 @@ class PurchaseDistributionController extends Controller
                         ]);
                     }
 
-                    $invoicedInThis = (float) $existingInvoicedDetails->where('movement_detail_id', $mdId)->sum('quantity');
+                    $invoicedInThis = (float) $existingInvoicedDetails->where('movement_detail_id', $mdId)->sum('quantity_base');
 
                     $available = (float) $source->quantity
                                - (float) ($alreadyDistributed[$mdId] ?? 0)
                                - (float) ($sortedOutQty[$mdId] ?? 0)
                                - $invoicedInThis;
 
-                    if ($qty > $available + 0.000001) {
+                    if ($qtyBaseTotal > $available + 0.000001) {
                         $itemName = $source->item?->itemName2 ?? 'الصنف';
                         throw ValidationException::withMessages([
-                            'details' => "الكمية المتاحة لـ «{$itemName}» هي {$available} فقط (المطلوب {$qty}).",
+                            'details' => "الكمية المتاحة لـ «{$itemName}» هي {$available} فقط (المطلوب {$qtyBaseTotal} بوحدة الدفعة).",
                         ]);
                     }
                 }
@@ -426,9 +444,10 @@ class PurchaseDistributionController extends Controller
                     ]);
                 }
 
-                foreach ($validated['details'] as $row) {
+                foreach ($rowsPrepared as $p) {
+                    $row    = $p['row'];
+                    $source = $p['source'];
                     $mdId   = (int) $row['movement_detail_id'];
-                    $source = $movementDetails->get($mdId);
                     $salePrice = (float) ($row['sale_price'] ?? $source->sale_price ?? 0);
 
                     DistributionDetail::create([
@@ -437,11 +456,20 @@ class PurchaseDistributionController extends Controller
                         'movement_id'         => $source->movement_id,
                         'movement_detail_id'  => $mdId,
                         'customer_id'         => (int) $row['customer_id'],
-                        'quantity'            => (float) $row['quantity'],
-                        'unit_cost'           => (float) ($source->unit_cost ?? 0),
+                        // أعمدة نافذة التوزيع الحقيقية
+                        'type_id'             => (int) $row['type_id'],
+                        'unit_id'             => (int) $row['unit_id'],
+                        'unit_weight'         => $p['unit_weight'] !== null ? (float) $p['unit_weight'] : null,
+                        'quantity'            => (float) $p['quantity'],
+                        'quantity_base'       => (float) $p['quantity_base'],
+                        'unit_cost'           => (float) $p['unit_cost'],
                         'sale_price'          => $salePrice,
+                        'total'               => round((float) $p['quantity'] * $salePrice, 6),
                     ]);
                 }
+
+                // حركة التوزيع الفعلية (الخصم من المخزن بوحدة الدفعة)
+                $this->syncDistributionMovement($distribution);
 
                 // تسجيل الحدث في سجل التتبع
                 $distribution->log(
@@ -464,36 +492,288 @@ class PurchaseDistributionController extends Controller
         }
     }
 
-    private function resolveRootPurchaseInvoiceId(InventoryMovementDetail $md): ?int
+    // ============================================================
+    // التحويل الخادمي للوحدات (bcmath بدقة 6 منازل)
+    // نفس منهج الواجهة: كيلو/جرام/حبة بالتعرف النصي، وغيرها عبر
+    // conversion_factor المخزن في شاشة الوحدات.
+    // ============================================================
+    private function isKiloUnitName(?string $name): bool
     {
-        $current = $md;
-        $visited = [];
-        $maxDepth = 20;
+        $s = strtolower(trim((string) $name));
+        return $s !== '' && (str_contains($s, 'كيلو') || str_contains($s, 'كجم') || $s === 'kg' || str_contains($s, 'kilogram'));
+    }
 
-        while ($current && $maxDepth-- > 0) {
-            if (in_array($current->movement_detail_id, $visited, true)) {
-                return null;
-            }
-            $visited[] = $current->movement_detail_id;
+    private function isGramUnitName(?string $name): bool
+    {
+        $s = strtolower(trim((string) $name));
+        return $s !== '' && (str_contains($s, 'جرام') || str_contains($s, 'جم') || $s === 'g' || str_contains($s, 'gram'));
+    }
 
-            $movement = $current->movement
-                ?: $current->movement()->first();
+    private function isPieceUnitName(?string $name): bool
+    {
+        return in_array(trim((string) $name), ['الحبة', 'حبة', 'حبه', 'حب', 'قطعة', 'قطعه'], true);
+    }
 
-            if ($movement && $movement->source_type === InventoryMovement::SOURCE_PURCHASE_INVOICE) {
-                return (int) $movement->source_id;
-            }
+    /**
+     * معامل الوحدة بالجرام.
+     * كيلو=1000، جرام=1، حبة=وزن الحبة المُدخَل (إلزامي)، غير ذلك=conversion_factor.
+     * @return string|null null عند الحاجة لوزن حبة غير مُدخَل أو معامل غير صالح
+     */
+    private function unitFactorGrams(?Unit $unit, ?string $pieceWeightGrams): ?string
+    {
+        if (!$unit) return null;
 
-            if (!$current->lot_source_detail_id) {
-                return null;
-            }
+        $name = trim((string) $unit->UnitName);
 
-            $current = InventoryMovementDetail::with('movement')
-                ->find($current->lot_source_detail_id);
+        if ($this->isPieceUnitName($name)) {
+            return ($pieceWeightGrams !== null && bccomp($pieceWeightGrams, '0', 6) > 0)
+                ? $pieceWeightGrams
+                : null;
+        }
+        if ($this->isKiloUnitName($name)) return '1000';
+        if ($this->isGramUnitName($name)) return '1';
 
-            if (!$current) return null;
+        $f = $unit->factor();
+        return $f > 0 ? number_format($f, 4, '.', '') : null;
+    }
+
+    /**
+     * تحويل كمية صف التوزيع من الوحدة المختارة إلى وحدة الدفعة + التكلفة للوحدة المختارة.
+     *
+     * @return array{quantity:string, quantity_base:string, unit_cost:string, unit_weight:?string}
+     */
+    private function convertRowQuantity(InventoryMovementDetail $source, array $row, $unitsById): array
+    {
+        $qty      = (float) $row['quantity'];
+        $qtyStr   = number_format($qty, 6, '.', '');
+        $chosenId = (int) $row['unit_id'];
+        $batchId  = $source->unit_id !== null ? (int) $source->unit_id : null;
+        $pieceW   = isset($row['unit_weight']) && $row['unit_weight'] !== null && (float) $row['unit_weight'] > 0
+                  ? number_format((float) $row['unit_weight'], 6, '.', '')
+                  : null;
+
+        $chosenUnit = $unitsById->get($chosenId);
+        $storedWeight = ($chosenUnit && $this->isPieceUnitName(trim((string) $chosenUnit->UnitName)))
+                      ? $pieceW : null;
+
+        // نفس وحدة الدفعة → تحويل 1:1 (بما فيها حبة←حبة)
+        if ($batchId === null || $chosenId === $batchId) {
+            return [
+                'quantity'      => $qtyStr,
+                'quantity_base' => $qtyStr,
+                'unit_cost'     => number_format((float) ($source->unit_cost ?? 0), 6, '.', ''),
+                'unit_weight'   => $storedWeight,
+            ];
         }
 
-        return null;
+        $itemName = $source->item?->itemName2 ?? "#{$source->movement_detail_id}";
+
+        $gramsChosen = $this->unitFactorGrams($chosenUnit, $pieceW);
+        if ($gramsChosen === null) {
+            throw ValidationException::withMessages([
+                'details' => "الصنف «{$itemName}»: وزن الحبة بالجرام إلزامي عندما تكون وحدة التوزيع «حبة».",
+            ]);
+        }
+
+        $gramsBatch = $this->unitFactorGrams($unitsById->get($batchId), $pieceW);
+        if ($gramsBatch === null || bccomp($gramsBatch, '0', 6) === 0) {
+            throw ValidationException::withMessages([
+                'details' => "الصنف «{$itemName}»: لا يمكن التحويل إلى وحدة الدفعة — أدخل وزن الحبة أو اضبط معامل التحويل في شاشة الوحدات.",
+            ]);
+        }
+
+        $qtyBase = bcdiv(bcmul($qtyStr, $gramsChosen, 6), $gramsBatch, 6);
+
+        if (bccomp($qtyBase, '0.000001', 6) < 0) {
+            throw ValidationException::withMessages([
+                'details' => "الصنف «{$itemName}»: الكمية المحوّلة إلى وحدة الدفعة غير صحيحة.",
+            ]);
+        }
+
+        // التكلفة لكل وحدة مختارة = تكلفة وحدة الدفعة × (الكمية الأساسية / الكمية المختارة)
+        $unitCostBase = (float) ($source->unit_cost ?? 0);
+        $unitCostChosen = '0';
+        if ($unitCostBase > 0 && bccomp($qtyStr, '0', 6) > 0) {
+            $unitCostChosen = bcmul(
+                bcdiv($qtyBase, $qtyStr, 6),
+                number_format($unitCostBase, 6, '.', ''),
+                6
+            );
+        }
+
+        return [
+            'quantity'      => $qtyStr,
+            'quantity_base' => $qtyBase,
+            'unit_cost'     => $unitCostChosen,
+            'unit_weight'   => $storedWeight,
+        ];
+    }
+
+    // ============================================================
+    // حركة التوزيع الفعلية (الخصم من المخزن) — تُبنى داخل نفس
+    // معاملة الحفظ، بكمية وحدة الدفعة (quantity_base)، وتُعاد
+    // بناؤها مع كل تحديث لتطابق الصفوف الحالية.
+    // ============================================================
+    protected function syncDistributionMovement(Distribution $distribution): void
+    {
+        $this->deleteDistributionMovement($distribution->id);
+
+        $details = DistributionDetail::query()
+            ->where('distribution_id', $distribution->id)
+            ->with('movementDetail')
+            ->get();
+
+        if ($details->isEmpty()) {
+            return;
+        }
+
+        $lastMovement = InventoryMovement::lockForUpdate()
+            ->orderBy('movement_id', 'desc')
+            ->first();
+        $nextNumber = $lastMovement ? ((int) $lastMovement->display_id + 1) : 1;
+
+        $warehouseId = $details->first()?->movementDetail?->warehouse_id;
+        if (!$warehouseId) {
+            throw ValidationException::withMessages([
+                'details' => 'لا يمكن إنشاء حركة التوزيع: الصفوف بلا مخزن.',
+            ]);
+        }
+
+        $movement = InventoryMovement::create([
+            'display_id'      => (string) $nextNumber,
+            'movement_type'   => InventoryMovement::TYPE_DISTRIBUTION,
+            'direction'       => InventoryMovement::directionForType(InventoryMovement::TYPE_DISTRIBUTION),
+            'movement_date'   => optional($distribution->distribution_date)->format('Y-m-d') ?? now()->toDateString(),
+            'document_number' => $distribution->code,
+            'warehouse_id'    => (int) $warehouseId,
+            'statement'       => 'خصم توزيع أصناف — توزيع رقم ' . $distribution->code,
+            'source_type'     => InventoryMovement::SOURCE_DISTRIBUTION,
+            'source_id'       => $distribution->id,
+            'total'           => 0,
+        ]);
+
+        $movementTotal = 0.0;
+
+        foreach ($details as $d) {
+            $md = $d->movementDetail;
+
+            if (!$md) {
+                throw ValidationException::withMessages([
+                    'details' => "صف التوزيع رقم {$d->id} غير مرتبط بحركة مخزون صحيحة.",
+                ]);
+            }
+
+            // الخصم بوحدة الدفعة (وحدة المخزون)
+            $qtyBase  = (float) $d->quantity_base > 0 ? (float) $d->quantity_base : (float) $d->quantity;
+            $unitCost = (float) ($md->unit_cost ?? 0);
+            $lineTotal = round($qtyBase * $unitCost, 6);
+
+            InventoryMovementDetail::create([
+                'movement_id'         => $movement->movement_id,
+                'item_id'             => $md->item_id,
+                // النوع من صف التوزيع (يُختار في نافذة التوزيع)
+                'type_id'             => $d->type_id !== null ? (int) $d->type_id : $md->type_id,
+                // وحدة المخزون = وحدة الدفعة الأصلية
+                'unit_id'             => $md->unit_id,
+                'code'                => $md->code,
+                'warehouse_id'        => $md->warehouse_id,
+                'supplier_account_id' => $md->supplier_account_id,
+                'quantity'            => $qtyBase,
+                'unit_cost'           => $unitCost,
+                'sale_price'          => $d->sale_price,
+                'total'               => $lineTotal,
+            ]);
+
+            $movementTotal += $lineTotal;
+        }
+
+        $movement->total = $movementTotal;
+        $movement->save();
+    }
+
+    /** حذف حركة التوزيع المرتبطة (تُستدعى عند إعادة البناء وعند الحذف) */
+    protected function deleteDistributionMovement(int $distributionId): void
+    {
+        $movements = InventoryMovement::query()
+            ->where('source_type', InventoryMovement::SOURCE_DISTRIBUTION)
+            ->where('source_id', $distributionId)
+            ->get();
+
+        foreach ($movements as $movement) {
+            $movement->details()->delete();
+            $movement->delete();
+        }
+    }
+
+    /**
+     * تحديد فاتورة الشراء الجذرية لكل دفعة دفعةً واحدة (بدون N+1).
+     * يسير سلسلة lot_source_detail_id صعوداً مستوىً في كل استعلام حتى
+     * حركة مصدرها فاتورة شراء — عدد الاستعلامات = عمق السلسلة + 1.
+     *
+     * @param  array $mdIds معرفات تفاصيل حركات المخزون
+     * @return array<int,int|null> mdId → purchase_invoice_id أو null
+     */
+    private function resolveRootPurchaseInvoiceIds(array $mdIds): array
+    {
+        $result  = [];
+        $pending = array_map('intval', $mdIds);
+        $loaded  = InventoryMovementDetail::query()
+            ->with('movement:movement_id,source_type,source_id')
+            ->whereIn('movement_detail_id', $pending)
+            ->get()
+            ->keyBy('movement_detail_id');
+
+        $maxDepth = 25;
+
+        while ($pending && $maxDepth-- > 0) {
+            $nextLevel = [];
+
+            foreach ($pending as $mdId) {
+                $current = $loaded->get($mdId);
+
+                if (!$current) {
+                    $result[$mdId] = null;
+                    continue;
+                }
+
+                $movement = $current->movement;
+
+                if ($movement && $movement->source_type === InventoryMovement::SOURCE_PURCHASE_INVOICE) {
+                    $result[$mdId] = (int) $movement->source_id;
+                    continue;
+                }
+
+                if (!$current->lot_source_detail_id) {
+                    $result[$mdId] = null;
+                    continue;
+                }
+
+                $nextLevel[(int) $current->lot_source_detail_id][] = $mdId;
+            }
+
+            if (!$nextLevel) {
+                break;
+            }
+
+            $parents = InventoryMovementDetail::query()
+                ->with('movement:movement_id,source_type,source_id')
+                ->whereIn('movement_detail_id', array_keys($nextLevel))
+                ->get()
+                ->keyBy('movement_detail_id');
+
+            foreach ($parents as $pid => $parent) {
+                $loaded->put($pid, $parent);
+            }
+
+            $pending = array_keys($nextLevel);
+        }
+
+        // ما تبقى بعد استنفاد العمق (سلسلة دائرية أو عميقة جداً)
+        foreach ($pending as $mdId) {
+            $result[$mdId] = null;
+        }
+
+        return $result;
     }
 
     // ============================================================
@@ -503,6 +783,8 @@ class PurchaseDistributionController extends Controller
     {
         $dist = Distribution::with([
             'details.customer',
+            'details.type',
+            'details.unit',
             'details.purchaseInvoice',
             'details.movementDetail.item',
             'details.movementDetail.type',
@@ -519,14 +801,20 @@ class PurchaseDistributionController extends Controller
             'customer_name'       => $d->customer?->CustomersName2,
             'customer_phone'      => $d->customer?->CusPhone,
             'item_name'           => $d->movementDetail?->item?->itemName2 ?? '—',
-            'type_name'           => $d->movementDetail?->type?->name ?? '—',
-            'unit_name'           => $d->movementDetail?->unit?->UnitName ?? '—',
+            // النوع والوحدة من صف التوزيع (نافذة التوزيع) مع مرجع قديم للصفوف السابقة
+            'type_id'             => $d->type_id,
+            'type_name'           => $d->type?->name ?? $d->movementDetail?->type?->name ?? '—',
+            'unit_id'             => $d->unit_id,
+            'unit_name'           => $d->unit?->UnitName ?? $d->movementDetail?->unit?->UnitName ?? '—',
+            'unit_weight'         => $d->unit_weight !== null ? (float) $d->unit_weight : null,
+            'quantity_base'       => (float) $d->quantity_base > 0 ? (float) $d->quantity_base : (float) $d->quantity,
             'code'                => $d->movementDetail?->code ?? '—',
             'quantity'            => (float) $d->quantity,
             'unit_cost'           => (float) $d->unit_cost,
             'sale_price'          => (float) $d->sale_price,
-            'total_cost'          => (float) $d->quantity * (float) $d->unit_cost,
-            'total_sale'          => (float) $d->quantity * (float) $d->sale_price,
+            'total'               => (float) $d->total > 0 ? (float) $d->total : round((float) $d->quantity * (float) $d->sale_price, 6),
+            'total_cost'          => round((float) $d->unit_cost * (float) $d->quantity, 6),
+            'total_sale'          => round((float) $d->quantity * (float) $d->sale_price, 6),
             'sales_invoice_id'    => $d->sales_invoice_id,
             'invoiced_at'         => optional($d->invoiced_at)->format('Y-m-d H:i'),
             'is_invoiced'         => $d->invoiced_at !== null || $d->sales_invoice_id !== null,
@@ -544,12 +832,12 @@ class PurchaseDistributionController extends Controller
         }
 
         $cleanNotes = $dist->notes;
-        $unitMeta   = null;
+        // ملاحظات قديمة كانت تُشفّر البيانات داخل JSON (_unit_meta) — نستخرج النص فقط للعرض.
+        // البيانات الجديدة تُخزّن في أعمدة distribution_details الحقيقية.
         if (!empty($cleanNotes) && str_starts_with(trim($cleanNotes), '{')) {
             $decoded = json_decode($cleanNotes, true);
             if (is_array($decoded) && isset($decoded['_unit_meta'])) {
                 $cleanNotes = $decoded['text'] ?? null;
-                $unitMeta   = $decoded['_unit_meta'] ?? null;
             }
         }
 
@@ -562,7 +850,6 @@ class PurchaseDistributionController extends Controller
                 'status'            => $dist->status,
                 'status_label'      => $dist->isDraft() ? 'مسودة' : 'مفوتر',
                 'notes'             => $cleanNotes,
-                'unit_meta'         => $unitMeta,
                 'is_draft'          => $dist->isDraft(),
             ],
             'summary' => [
@@ -592,6 +879,7 @@ class PurchaseDistributionController extends Controller
 
         DB::beginTransaction();
         try {
+            $this->deleteDistributionMovement($dist->id);
             $dist->details()->delete();
             $dist->delete();
 
@@ -1074,8 +1362,10 @@ class PurchaseDistributionController extends Controller
                     $md = $d->movementDetail;
                     return [
                         'item_id'             => (int) $md->item_id,
-                        'type_id'             => $md->type_id ? (int) $md->type_id : null,
-                        'unit_id'             => $md->unit_id ? (int) $md->unit_id : null,
+                        // النوع والوحدة من صف التوزيع (نافذة التوزيع) — وليس من الدفعة —
+                        // مع مرجع قديم للصفوف التي أُنشئت قبل الأعمدة الجديدة
+                        'type_id'             => $d->type_id ? (int) $d->type_id : ($md->type_id ? (int) $md->type_id : null),
+                        'unit_id'             => $d->unit_id ? (int) $d->unit_id : ($md->unit_id ? (int) $md->unit_id : null),
                         'warehouse_id'        => (int) $md->warehouse_id,
                         'supplier_account_id' => $md->supplier_account_id ? (int) $md->supplier_account_id : null,
                         'code'                => $md->code ?? null,

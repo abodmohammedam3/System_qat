@@ -17,6 +17,7 @@ class UnitResource extends JsonResource
             'UnitID'     => $this->UnitID,
             'UnitName'   => $this->UnitName,
             'is_active'  => (int) $this->is_active,
+            'conversion_factor' => (float) ($this->conversion_factor ?? 1),
             'created_by' => $this->created_by,
             'updated_by' => $this->updated_by,
         ];
