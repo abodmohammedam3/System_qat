@@ -715,44 +715,58 @@ class PurchaseDistributionController extends Controller
      */
     private function resolveRootPurchaseInvoiceIds(array $mdIds): array
     {
-        $result  = [];
-        $pending = array_map('intval', $mdIds);
-        $loaded  = InventoryMovementDetail::query()
+        $result     = [];
+        $pendingMap = [];
+        foreach ($mdIds as $id) {
+            $id = (int) $id;
+            $pendingMap[$id][] = $id;
+        }
+
+        $loaded = InventoryMovementDetail::query()
             ->with('movement:movement_id,source_type,source_id')
-            ->whereIn('movement_detail_id', $pending)
+            ->whereIn('movement_detail_id', array_keys($pendingMap))
             ->get()
             ->keyBy('movement_detail_id');
 
         $maxDepth = 25;
 
-        while ($pending && $maxDepth-- > 0) {
+        while ($pendingMap && $maxDepth-- > 0) {
             $nextLevel = [];
 
-            foreach ($pending as $mdId) {
-                $current = $loaded->get($mdId);
+            foreach ($pendingMap as $nodeId => $origIds) {
+                $current = $loaded->get($nodeId);
 
                 if (!$current) {
-                    $result[$mdId] = null;
+                    foreach ($origIds as $origId) {
+                        $result[$origId] = null;
+                    }
                     continue;
                 }
 
                 $movement = $current->movement;
 
                 if ($movement && $movement->source_type === InventoryMovement::SOURCE_PURCHASE_INVOICE) {
-                    $result[$mdId] = (int) $movement->source_id;
+                    foreach ($origIds as $origId) {
+                        $result[$origId] = (int) $movement->source_id;
+                    }
                     continue;
                 }
 
                 if (!$current->lot_source_detail_id) {
-                    $result[$mdId] = null;
+                    foreach ($origIds as $origId) {
+                        $result[$origId] = null;
+                    }
                     continue;
                 }
 
-                $nextLevel[(int) $current->lot_source_detail_id][] = $mdId;
+                $parentId = (int) $current->lot_source_detail_id;
+                foreach ($origIds as $origId) {
+                    $nextLevel[$parentId][] = $origId;
+                }
             }
 
             if (!$nextLevel) {
-                $pending = [];
+                $pendingMap = [];
                 break;
             }
 
@@ -766,12 +780,14 @@ class PurchaseDistributionController extends Controller
                 $loaded->put($pid, $parent);
             }
 
-            $pending = array_keys($nextLevel);
+            $pendingMap = $nextLevel;
         }
 
         // ما تبقى بعد استنفاد العمق (سلسلة دائرية أو عميقة جداً)
-        foreach ($pending as $mdId) {
-            $result[$mdId] = null;
+        foreach ($pendingMap as $origIds) {
+            foreach ($origIds as $origId) {
+                $result[$origId] = null;
+            }
         }
 
         return $result;
