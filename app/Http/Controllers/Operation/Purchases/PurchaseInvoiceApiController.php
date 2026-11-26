@@ -72,9 +72,6 @@ class PurchaseInvoiceApiController extends Controller
             $q->orWhere('statement', 'like', "%{$search}%")
               ->orWhereHas('details.item', function ($q2) use ($search) {
                   $q2->where('itemName2', 'like', "%{$search}%");
-              })
-              ->orWhereHas('details.type', function ($q2) use ($search) {
-                  $q2->where('name', 'like', "%{$search}%");
               });
 
             foreach (PurchaseInvoice::paymentMethodLabels() as $val => $label) {
@@ -95,7 +92,6 @@ class PurchaseInvoiceApiController extends Controller
 
         $invoice = PurchaseInvoice::with([
             'details.item',
-            'details.type',
             'details.unit',
             'supplierAccount',
             'paymentAccount',

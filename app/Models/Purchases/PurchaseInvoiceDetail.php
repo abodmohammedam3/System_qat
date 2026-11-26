@@ -62,18 +62,6 @@ class PurchaseInvoiceDetail extends Model
     }
 
     /**
-     * النوع
-     */
-    public function type()
-    {
-        return $this->belongsTo(
-            Type::class,
-            'type_id',
-            'id'
-        );
-    }
-
-    /**
      * الوحدة
      */
     public function unit()

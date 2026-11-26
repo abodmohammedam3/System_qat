@@ -31,13 +31,12 @@
             <thead class="table-light">
                 <tr>
                     <th style="width: 5%;">الرقم</th>
-                    <th style="width: 16%;">الصنف</th>
-                    <th style="width: 10%;">النوع</th>
-                    <th style="width: 9%;">الرمز</th>
-                    <th style="width: 11%;">الوحدة</th>
-                    <th style="width: 11%;">الكمية</th>
-                    <th style="width: 10%;">سعر الوحدة</th>
-                    <th style="width: 9%;">الخصم</th>
+                    <th style="width: 20%;">الصنف</th>
+                    <th style="width: 11%;">الرمز</th>
+                    <th style="width: 12%;">الوحدة</th>
+                    <th style="width: 12%;">الكمية</th>
+                    <th style="width: 11%;">سعر الوحدة</th>
+                    <th style="width: 10%;">الخصم</th>
                     <th style="width: 12%;">الإجمالي</th>
                     <th style="width: 7%;">إجراء</th>
                 </tr>
@@ -45,7 +44,7 @@
 
             <tbody id="purchaseInvoiceDetails">
                 <tr>
-                    <td colspan="10" class="text-center text-muted py-4">
+                    <td colspan="9" class="text-center text-muted py-4">
                         لا توجد أصناف مضافة إلى الفاتورة
                     </td>
                 </tr>
@@ -53,7 +52,7 @@
 
             <tfoot>
                 <tr>
-                    <td colspan="10" class="p-3 bg-light">
+                    <td colspan="9" class="p-3 bg-light">
                         <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
 
                             <div class="flex-grow-1" style="max-width: 50%;">
@@ -340,18 +339,6 @@
                 disabled
                 data-lookup="item"
                 data-lookup-display-field="itemName2"
-                autocomplete="off"
-            >
-        </td>
-
-        <td>
-            <input
-                type="text"
-                class="form-control form-control-sm row-type"
-                placeholder="النوع"
-                disabled
-                data-lookup="type"
-                data-lookup-display-field="name"
                 autocomplete="off"
             >
         </td>

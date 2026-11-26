@@ -123,7 +123,7 @@ class ItemLedgerReport implements Report
             ->cloneWithout(['columns'])
             ->selectRaw("COALESCE(SUM(CASE WHEN im.direction = 'in'  THEN inventory_movement_details.quantity ELSE 0 END), 0) as in_qty")
             ->selectRaw("COALESCE(SUM(CASE WHEN im.direction = 'out' AND im.movement_type != ? THEN inventory_movement_details.quantity ELSE 0 END), 0) as out_qty", [InventoryMovement::TYPE_SALE_DISTRIBUTION])
-            ->selectRaw('COALESCE(SUM(inventory_movement_details.total), 0) as total')
+            ->selectRaw("COALESCE(SUM(CASE WHEN im.movement_type != ? THEN inventory_movement_details.total ELSE 0 END), 0) as total", [InventoryMovement::TYPE_SALE_DISTRIBUTION])
             ->first();
 
         $count = (clone $query)->count();
@@ -175,7 +175,7 @@ class ItemLedgerReport implements Report
                 'in_qty'        => $direction === 'in' ? $qty : 0,
                 'out_qty'       => ($direction === 'out' && !$isDocumentary) ? $qty : 0,
                 'unit_cost'     => (float) $d->unit_cost,
-                'total'         => (float) $d->total,
+                'total'         => $isDocumentary ? 0.0 : (float) $d->total,
             ];
         }
 

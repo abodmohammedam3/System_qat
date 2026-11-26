@@ -184,17 +184,6 @@ function registerItemLookupHook() {
         if (!tr || !tr.classList.contains('purchase-detail-row')) return;
 
         target.dataset.itemId = row.itemID ?? '';
-        setTimeout(() => tr.querySelector('.row-type')?.focus(), 200);
-    };
-}
-
-function registerTypeLookupHook() {
-    if (typeof LookupConfigs === 'undefined') return;
-    LookupConfigs.type.onSelect = (row, target) => {
-        const tr = target.closest('tr');
-        if (!tr || !tr.classList.contains('purchase-detail-row')) return;
-
-        target.dataset.typeId = row.id ?? '';
         setTimeout(() => tr.querySelector('.row-code')?.focus(), 200);
     };
 }
@@ -230,7 +219,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     registerCurrencyLookupHook();
     registerItemLookupHook();
-    registerTypeLookupHook();
 
     // ✅ حماية حقل سعر الصرف من أي إدخال
     protectExchangeRateInput();
@@ -463,7 +451,7 @@ function setEmptyDetailsMessage() {
 
     const tr = document.createElement('tr');
     const td = document.createElement('td');
-    td.colSpan = 10;
+    td.colSpan = 9;
     td.className = 'text-center text-muted py-4';
     td.textContent = 'لا توجد أصناف مضافة إلى الفاتورة';
     tr.appendChild(td);
@@ -476,7 +464,7 @@ function addInvoiceRow() {
     const tbody = document.getElementById('purchaseInvoiceDetails');
     if (!tbody) return;
 
-    const emptyTd = tbody.querySelector('td[colspan="10"]');
+    const emptyTd = tbody.querySelector('td[colspan="9"]');
     if (emptyTd) while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
 
     const tpl = document.getElementById('invoiceRowTemplate');
@@ -1104,10 +1092,6 @@ async function loadInvoice(id) {
             itemInput.value = d.item_name ?? '';
             itemInput.dataset.itemId = d.item_id ?? '';
 
-            const typeInput = row.querySelector('.row-type');
-            typeInput.value = d.type_name ?? '';
-            typeInput.dataset.typeId = d.type_id ?? '';
-
             row.querySelector('.row-code').value = d.code ?? '';
             row.querySelector('.row-weight').value = d.quantity;
             row.querySelector('.row-price').value = d.price;
@@ -1164,7 +1148,6 @@ function takeSnapshot() {
             document.querySelectorAll('#purchaseInvoiceDetails .purchase-detail-row')
         ).map(r => ({
             item: r.querySelector('.row-item')?.dataset.itemId || '',
-            type: r.querySelector('.row-type')?.dataset.typeId || '',
             code: r.querySelector('.row-code')?.value || '',
             unit: r.querySelector('.row-unit')?.value || '',
             qty: r.querySelector('.row-weight')?.value || '',
@@ -1312,8 +1295,6 @@ async function saveInvoice() {
 
         details.push({
             item_id: Number(itemId),
-            type_id: row.querySelector('.row-type').dataset.typeId
-                ? Number(row.querySelector('.row-type').dataset.typeId) : null,
             unit_id: row.querySelector('.row-unit').value
                 ? Number(row.querySelector('.row-unit').value) : null,
             code: row.querySelector('.row-code').value || null,

@@ -13,8 +13,6 @@ class PurchaseInvoiceDetailResource extends JsonResource
             'purchase_invoice_detail_id' => $this->purchase_invoice_detail_id,
             'item_id'    => $this->item_id,
             'item_name'  => $this->item->itemName2 ?? '',
-            'type_id'    => $this->type_id,
-            'type_name'  => $this->type->name ?? '',
             'unit_id'    => $this->unit_id,
             'unit_name'  => $this->unit->UnitName ?? '',
             'code'       => $this->code,

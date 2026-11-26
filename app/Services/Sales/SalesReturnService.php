@@ -517,35 +517,65 @@ class SalesReturnService
             return (int) $invoiceDetail->supplier_account_id;
         }
 
-        $outDetail = InventoryMovementDetail::query()
-            ->join('inventory_movements as im', 'im.movement_id', '=', 'inventory_movement_details.movement_id')
-            ->where('im.source_type', InventoryMovement::SOURCE_SALES_INVOICE)
-            ->where('im.direction', 'out')
-            ->where('inventory_movement_details.item_id', $detail->item_id)
-            ->where('inventory_movement_details.warehouse_id', $detail->warehouse_id)
-            ->where('inventory_movement_details.type_id', $detail->type_id)
-            ->where('inventory_movement_details.unit_id', $detail->unit_id)
-            ->orderByDesc('inventory_movement_details.movement_detail_id')
-            ->value('inventory_movement_details.supplier_account_id');
+        if ($invoiceDetail) {
+            $outDetail = InventoryMovementDetail::query()
+                ->join('inventory_movements as im', 'im.movement_id', '=', 'inventory_movement_details.movement_id')
+                ->where('im.source_type', InventoryMovement::SOURCE_SALES_INVOICE)
+                ->where('im.source_id', $invoiceDetail->sales_invoice_id)
+                ->where('im.direction', 'out')
+                ->where('inventory_movement_details.item_id', $detail->item_id)
+                ->where('inventory_movement_details.warehouse_id', $detail->warehouse_id)
+                ->when($detail->type_id !== null, fn($q) => $q->where('inventory_movement_details.type_id', $detail->type_id))
+                ->when($detail->unit_id !== null, fn($q) => $q->where('inventory_movement_details.unit_id', $detail->unit_id))
+                ->orderByDesc('inventory_movement_details.movement_detail_id')
+                ->value('inventory_movement_details.supplier_account_id');
 
-        return $outDetail !== null ? (int) $outDetail : null;
+            if ($outDetail !== null) {
+                return (int) $outDetail;
+            }
+        }
+
+        return null;
     }
 
     /**
-     * ✅ دفعة الأصل (lot_source) لمرتجع البيع — لتفادي دمج التكلفة.
+     * ✅ دفعة الأصل (lot_source) لمرتجع البيع — من صف التوزيع الأصلي إن وجد،
+     * وإلا من حركة فاتورة البيع الأصلية (مقيدة بـ source_id).
      */
     protected function resolveLotSourceForSaleReturn(SalesReturnDetail $detail): ?int
     {
-        return InventoryMovementDetail::query()
+        $invoiceDetail = SalesInvoiceDetail::find($detail->sales_invoice_detail_id);
+        if (!$invoiceDetail) {
+            return null;
+        }
+
+        $distDetail = \App\Models\Purchases\DistributionDetail::query()
+            ->where('sales_invoice_id', $invoiceDetail->sales_invoice_id)
+            ->whereHas('movementDetail', function ($q) use ($detail) {
+                $q->where('item_id', $detail->item_id)
+                  ->where('warehouse_id', $detail->warehouse_id);
+            })
+            ->when($detail->type_id !== null, fn($q) => $q->where('type_id', $detail->type_id))
+            ->when($detail->unit_id !== null, fn($q) => $q->where('unit_id', $detail->unit_id))
+            ->value('movement_detail_id');
+
+        if ($distDetail !== null) {
+            return (int) $distDetail;
+        }
+
+        $outId = InventoryMovementDetail::query()
             ->join('inventory_movements as im', 'im.movement_id', '=', 'inventory_movement_details.movement_id')
             ->where('im.source_type', InventoryMovement::SOURCE_SALES_INVOICE)
+            ->where('im.source_id', $invoiceDetail->sales_invoice_id)
             ->where('im.direction', 'out')
             ->where('inventory_movement_details.item_id', $detail->item_id)
             ->where('inventory_movement_details.warehouse_id', $detail->warehouse_id)
-            ->where('inventory_movement_details.type_id', $detail->type_id)
-            ->where('inventory_movement_details.unit_id', $detail->unit_id)
+            ->when($detail->type_id !== null, fn($q) => $q->where('inventory_movement_details.type_id', $detail->type_id))
+            ->when($detail->unit_id !== null, fn($q) => $q->where('inventory_movement_details.unit_id', $detail->unit_id))
             ->orderByDesc('inventory_movement_details.movement_detail_id')
             ->value('inventory_movement_details.movement_detail_id');
+
+        return $outId !== null ? (int) $outId : null;
     }
 
     public function deleteInventoryMovement(SalesReturn $salesReturn): void

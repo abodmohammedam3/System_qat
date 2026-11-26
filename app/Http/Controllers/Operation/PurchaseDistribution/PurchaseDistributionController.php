@@ -147,9 +147,9 @@ class PurchaseDistributionController extends Controller
         $allDetails = $originalDetails->merge($sortedDetails);
         $detailIds  = $allDetails->pluck('movement_detail_id')->all();
 
-        // 5) الموزّع الفعلي من كل دفعة (مع استثناء التوزيع الحالي إن وجد)
+        // 5) الموزّع الفعلي من كل دفعة (بوحدة الدفعة: quantity_base، مع استثناء التوزيع الحالي إن وجد)
         $distributedQuery = DistributionDetail::query()
-            ->select('movement_detail_id', DB::raw('SUM(quantity) as total'))
+            ->select('movement_detail_id', DB::raw('SUM(CASE WHEN quantity_base > 0 THEN quantity_base ELSE quantity END) as total'))
             ->whereIn('movement_detail_id', $detailIds)
             ->whereNotNull('distribution_id')
             ->whereHas('distribution');
@@ -1013,6 +1013,8 @@ class PurchaseDistributionController extends Controller
                 $q->where('customer_id', $customerId)
                   ->whereNull('sales_invoice_id')
                   ->with([
+                      'type',
+                      'unit',
                       'purchaseInvoice.coin',
                       'movementDetail.item',
                       'movementDetail.type',
@@ -1049,8 +1051,8 @@ class PurchaseDistributionController extends Controller
                     'id'             => $row->id,
                     'invoice_number' => $row->purchaseInvoice?->invoice_number,
                     'item_name'      => $row->movementDetail?->item?->itemName2 ?? '—',
-                    'type_name'      => $row->movementDetail?->type?->name ?? '—',
-                    'unit_name'      => $row->movementDetail?->unit?->UnitName ?? '—',
+                    'type_name'      => $row->type?->name ?? $row->movementDetail?->type?->name ?? '—',
+                    'unit_name'      => $row->unit?->UnitName ?? $row->movementDetail?->unit?->UnitName ?? '—',
                     'code'           => $row->movementDetail?->code ?? '—',
                     'quantity'       => (float) $row->quantity,
                     'unit_cost'      => (float) $row->unit_cost,
@@ -1078,6 +1080,8 @@ class PurchaseDistributionController extends Controller
         $q = DistributionDetail::query()
             ->with([
                 'distribution:id,code,distribution_date,status',
+                'type:id,name',
+                'unit:UnitID,UnitName',
                 'purchaseInvoice:purchase_invoice_id,invoice_number',
                 'movementDetail.item:itemID,itemName2',
                 'movementDetail.type:id,name',
@@ -1095,8 +1099,8 @@ class PurchaseDistributionController extends Controller
             'dist_status'    => $d->distribution?->status,
             'invoice_number' => $d->purchaseInvoice?->invoice_number,
             'item_name'      => $d->movementDetail?->item?->itemName2 ?? '—',
-            'type_name'      => $d->movementDetail?->type?->name ?? '—',
-            'unit_name'      => $d->movementDetail?->unit?->UnitName ?? '—',
+            'type_name'      => $d->type?->name ?? $d->movementDetail?->type?->name ?? '—',
+            'unit_name'      => $d->unit?->UnitName ?? $d->movementDetail?->unit?->UnitName ?? '—',
             'code'           => $d->movementDetail?->code ?? '—',
             'quantity'       => (float) $d->quantity,
             'unit_cost'      => (float) $d->unit_cost,
@@ -1205,6 +1209,8 @@ class PurchaseDistributionController extends Controller
             ->with([
                 'distribution:id,code,distribution_date,status',
                 'customer:CustomersID,CustomersName2,CusPhone',
+                'type:id,name',
+                'unit:UnitID,UnitName',
                 'movementDetail.item:itemID,itemName2',
                 'movementDetail.type:id,name',
                 'movementDetail.unit:UnitID,UnitName',
@@ -1221,8 +1227,8 @@ class PurchaseDistributionController extends Controller
                 'customer_name'  => $d->customer?->CustomersName2 ?? '—',
                 'customer_phone' => $d->customer?->CusPhone,
                 'item_name'      => $d->movementDetail?->item?->itemName2 ?? '—',
-                'type_name'      => $d->movementDetail?->type?->name ?? '—',
-                'unit_name'      => $d->movementDetail?->unit?->UnitName ?? '—',
+                'type_name'      => $d->type?->name ?? $d->movementDetail?->type?->name ?? '—',
+                'unit_name'      => $d->unit?->UnitName ?? $d->movementDetail?->unit?->UnitName ?? '—',
                 'code'           => $d->movementDetail?->code ?? '—',
                 'quantity'       => (float) $d->quantity,
                 'unit_cost'      => (float) $d->unit_cost,
@@ -1292,164 +1298,42 @@ class PurchaseDistributionController extends Controller
         $distributionIds = $validated['distribution_ids'];
         $paymentMethod   = (int) $validated['payment_method'];
 
-        if ($paymentMethod !== SalesInvoice::PAYMENT_CREDIT) {
-            if (empty($validated['payment_account_id'])) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'حساب الدفع مطلوب لهذه الطريقة (نقدي / بنك).',
-                ], 422);
-            }
-            $paymentAccount = CharAccount::find((int) $validated['payment_account_id']);
-            if (!$paymentAccount) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'حساب الدفع المحدد غير موجود.',
-                ], 422);
-            }
-        }
-
-        $customer = Customer::findOrFail($customerId);
-        if (empty($customer->accountID)) {
-            return response()->json([
-                'success' => false,
-                'message' => 'العميل «' . $customer->CustomersName2 . '» غير مرتبط بحساب محاسبي.',
-            ], 422);
-        }
-
-        $lockKey = "distribution_issue_customer_{$customerId}";
-        $lock    = Cache::lock($lockKey, 20);
-
-        if (!$lock->get()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'عملية إصدار فاتورة أخرى لنفس العميل قيد التنفيذ. حاول بعد قليل.',
-            ], 409);
-        }
-
         try {
-            return DB::transaction(function () use ($customerId, $distributionIds, $paymentMethod, $customer, $validated) {
-                $detailsQuery = DistributionDetail::query()
-                    ->whereIn('distribution_id', $distributionIds)
-                    ->where('customer_id', $customerId)
-                    ->whereNull('sales_invoice_id');
+            /** @var SalesInvoice $invoice */
+            $invoice = app(\App\Services\Purchases\DistributionService::class)->issueInvoice(
+                $customerId,
+                $distributionIds,
+                [
+                    'detail_ids'         => $validated['detail_ids'] ?? null,
+                    'payment_method'     => $paymentMethod,
+                    'payment_account_id' => $validated['payment_account_id'] ?? null,
+                    'statement'          => $validated['statement'] ?? null,
+                    'reference'          => $validated['reference'] ?? null,
+                ]
+            );
 
-                if (!empty($validated['detail_ids'])) {
-                    $detailsQuery->whereIn('id', $validated['detail_ids']);
-                }
-
-                $details = $detailsQuery->with(['movementDetail', 'purchaseInvoice.coin'])
-                    ->lockForUpdate()
-                    ->get();
-
-                if ($details->isEmpty()) {
-                    return response()->json([
-                        'success' => false,
-                        'message' => 'لا توجد تفاصيل قابلة للفوترة (قد تكون فُوترت بالفعل من عملية أخرى).',
-                    ], 422);
-                }
-
-                foreach ($details as $d) {
-                    if (!$d->movementDetail) {
-                        return response()->json([
-                            'success' => false,
-                            'message' => "التفصيل #{$d->id} مفقود في حركة المخزون.",
-                        ], 422);
-                    }
-                    if (!$d->purchaseInvoice) {
-                        return response()->json([
-                            'success' => false,
-                            'message' => "التفصيل #{$d->id} مفقود في فاتورة الشراء.",
-                        ], 422);
-                    }
-                }
-
-                $coins = $details->pluck('purchaseInvoice.coin_id')->unique();
-                if ($coins->count() > 1) {
-                    return response()->json([
-                        'success' => false,
-                        'message' => 'لا يمكن إصدار فاتورة واحدة بتوزيعات من فواتير بعملات مختلفة. يرجى تحديد أصناف عملة واحدة وإصدار فاتورة لها، ثم إصدار فاتورة لبقية الأصناف بالعملة الأخرى.',
-                    ], 422);
-                }
-
-                $firstInvoice = $details->first()->purchaseInvoice;
-                $coinId       = (int) $firstInvoice->coin_id;
-                $exchangeRate = (float) ($firstInvoice->exchange_rate ?: 1);
-
-                $items = $details->map(function ($d) {
-                    $md = $d->movementDetail;
-                    return [
-                        'item_id'             => (int) $md->item_id,
-                        // النوع والوحدة من صف التوزيع (نافذة التوزيع) — وليس من الدفعة —
-                        // مع مرجع قديم للصفوف التي أُنشئت قبل الأعمدة الجديدة
-                        'type_id'             => $d->type_id ? (int) $d->type_id : ($md->type_id ? (int) $md->type_id : null),
-                        'unit_id'             => $d->unit_id ? (int) $d->unit_id : ($md->unit_id ? (int) $md->unit_id : null),
-                        'warehouse_id'        => (int) $md->warehouse_id,
-                        'supplier_account_id' => $md->supplier_account_id ? (int) $md->supplier_account_id : null,
-                        'code'                => $md->code ?? null,
-                        'quantity'            => (float) $d->quantity,
-                        'price'               => (float) $d->sale_price,
-                        'cost_price'          => (float) $d->unit_cost,
-                        'discount'            => 0,
-                    ];
-                })->all();
-
-                $data = [
-                    'invoice_date'          => now()->toDateString(),
-                    'account_id'            => (int) $customer->accountID,
-                    'payment_account_id'    => $paymentMethod === SalesInvoice::PAYMENT_CREDIT
-                                               ? null
-                                               : (int) $validated['payment_account_id'],
-                    'coin_id'               => $coinId,
-                    'exchange_rate'         => $exchangeRate,
-                    'payment_method'        => $paymentMethod,
-                    'statement'             => $validated['statement'] ?? null,
-                    'reference'             => $validated['reference'] ?? null,
-                    'details'                 => $items,
-                    'skip_stock_validation'   => true,
-                    'distribution_detail_ids' => $details->pluck('id')->all(),
-                ];
-
-                /** @var SalesInvoice $invoice */
-                $invoice = app(SalesInvoiceService::class)->create($data);
-
-                foreach ($distributionIds as $distId) {
-                    $remaining = DistributionDetail::where('distribution_id', $distId)
-                        ->whereNull('sales_invoice_id')
-                        ->count();
-
-                    if ($remaining === 0) {
-                        Distribution::find($distId)?->update([
-                            'status'      => Distribution::STATUS_INVOICED,
-                            'invoiced_at' => now(),
-                            'invoiced_by' => auth()->id(),
-                        ]);
-                    }
-
-                    Distribution::find($distId)?->log(
-                        'issued',
-                        "تم إصدار فاتورة المبيعات {$invoice->invoice_number} للعميل «{$customer->CustomersName2}»",
-                        [
-                            'sales_invoice_id' => $invoice->sales_invoice_id,
-                            'invoice_number'   => $invoice->invoice_number,
-                            'customer_id'      => $customerId,
-                            'items_count'      => count($items),
-                        ]
-                    );
-                }
-
-                return response()->json([
-                    'success'          => true,
-                    'message'          => 'تم إصدار فاتورة المبيعات وترحيلها بنجاح.',
-                    'sales_invoice_id' => $invoice->sales_invoice_id,
-                    'invoice_number'   => $invoice->invoice_number,
-                ]);
-            });
+            return response()->json([
+                'success'          => true,
+                'message'          => 'تم إصدار فاتورة المبيعات وترحيلها بنجاح.',
+                'sales_invoice_id' => $invoice->sales_invoice_id,
+                'invoice_number'   => $invoice->invoice_number,
+            ]);
         } catch (ValidationException $e) {
+            $errors = $e->errors();
+            $firstMessage = collect($errors)->flatten()->first() ?: 'بيانات غير صحيحة';
+
             return response()->json([
                 'success' => false,
-                'message' => 'بيانات غير صحيحة',
-                'errors'  => $e->errors(),
+                'message' => $firstMessage,
+                'errors'  => $errors,
             ], 422);
+        } catch (\RuntimeException $e) {
+            $status = $e->getCode() === 409 ? 409 : 422;
+
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage(),
+            ], $status);
         } catch (\Throwable $e) {
             Log::error('issueInvoice failed', [
                 'message'          => $e->getMessage(),
@@ -1464,8 +1348,6 @@ class PurchaseDistributionController extends Controller
                 'success' => false,
                 'message' => 'فشل إصدار الفاتورة: ' . $e->getMessage(),
             ], 500);
-        } finally {
-            $lock->release();
         }
     }
 
@@ -1763,6 +1645,8 @@ class PurchaseDistributionController extends Controller
             ->where('distribution_id', $distributionId)
             ->where('customer_id', $customerId)
             ->with([
+                'type',
+                'unit',
                 'movementDetail.item',
                 'movementDetail.type',
                 'movementDetail.unit',
@@ -1781,7 +1665,7 @@ class PurchaseDistributionController extends Controller
         $movementDetailIds = $details->pluck('movement_detail_id')->unique()->values()->all();
 
         $otherDistByMD = DistributionDetail::query()
-            ->select('movement_detail_id', DB::raw('SUM(quantity) as total'))
+            ->select('movement_detail_id', DB::raw('SUM(CASE WHEN quantity_base > 0 THEN quantity_base ELSE quantity END) as total'))
             ->where('distribution_id', '!=', $distributionId)
             ->whereIn('movement_detail_id', $movementDetailIds)
             ->whereHas('distribution')
@@ -1816,7 +1700,8 @@ class PurchaseDistributionController extends Controller
             $convertedQty = (float) ($convertedByMD[$d->movement_detail_id] ?? 0);
 
             // الكمية الإضافية المتاحة لهذا التوزيع بعد خصم التوزيعات الأخرى والفرز الخارج
-            $extraAvailableInBatch = max(0.0, $batchQty - $otherDistQty - $sortedOutQty - (float) $d->quantity);
+            $selfBaseQty = (float) ($d->quantity_base > 0 ? $d->quantity_base : $d->quantity);
+            $extraAvailableInBatch = max(0.0, $batchQty - $otherDistQty - $sortedOutQty - $selfBaseQty);
             $isInvoiced = $d->sales_invoice_id !== null || $d->invoiced_at !== null;
 
             return [
@@ -1826,8 +1711,8 @@ class PurchaseDistributionController extends Controller
                 'coin_id'            => $d->purchaseInvoice?->coin_id,
                 'coin_code'          => $d->purchaseInvoice?->coin?->coinsCode ?? 'ر.ي',
                 'item_name'          => $md?->item?->itemName2 ?? '—',
-                'type_name'          => $md?->type?->name ?? '—',
-                'unit_name'          => $md?->unit?->UnitName ?? '—',
+                'type_name'          => $d->type?->name ?? $md?->type?->name ?? '—',
+                'unit_name'          => $d->unit?->UnitName ?? $md?->unit?->UnitName ?? '—',
                 'code'               => $md?->code ?? '—',
                 'batch_quantity'     => $batchQty,
                 'sorted_out_qty'     => $sortedOutQty,

@@ -20,7 +20,7 @@
 </style>
 
 <div class="modal fade" id="allocationModal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+    <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
         <div class="modal-content border-0 shadow">
 
             <div class="modal-header bg-white border-0 py-3">
@@ -79,14 +79,13 @@
                         <thead class="table-light sticky-top">
                             <tr class="small text-muted">
                                 <th>العميل</th>
-                                <!-- عمود النوع — إلزامي من شاشة الأنواع -->
-                                <th style="width:120px" class="text-center">النوع</th>
-                                <!-- تم توسيع عمود الوحدة من 92px إلى 150px لاستيعاب الحقول المتراصة -->
-                                <th style="width:150px" class="text-center">الوحدة</th>
-                                <th style="width:88px" class="text-center">الكمية</th>
-                                <th style="width:96px" class="text-center">السعر للوحدة</th>
-                                <th style="width:104px" class="text-center">الإجمالي</th>
-                                <th style="width:44px"></th>
+                                <th style="width:130px" class="text-center">نوع القات</th>
+                                <th style="width:110px" class="text-center">الوحدة</th>
+                                <th style="width:105px" class="text-center">وزن الحبة (جم)</th>
+                                <th style="width:92px" class="text-center">الكمية</th>
+                                <th style="width:98px" class="text-center">السعر للوحدة</th>
+                                <th style="width:106px" class="text-center">الإجمالي</th>
+                                <th style="width:68px" class="text-center">الإجراءات</th>
                             </tr>
                         </thead>
                         <tbody id="allocationTableBody"></tbody>

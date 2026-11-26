@@ -372,13 +372,12 @@
     <thead>
         <tr>
             <th style="width: 5%;">الرقم</th>
-            <th style="width: 22%;">الصنف</th>
-            <th style="width: 15%;">النوع</th>
-            <th style="width: 12%;">الرمز</th>
-            <th style="width: 10%;">الوحدة</th>
-            <th style="width: 10%;">الكمية</th>
-            <th style="width: 12%;">السعر</th>
-            <th style="width: 14%;">الإجمالي</th>
+            <th style="width: 28%;">الصنف</th>
+            <th style="width: 14%;">الرمز</th>
+            <th style="width: 12%;">الوحدة</th>
+            <th style="width: 12%;">الكمية</th>
+            <th style="width: 14%;">السعر</th>
+            <th style="width: 15%;">الإجمالي</th>
         </tr>
     </thead>
     <tbody>
@@ -386,7 +385,6 @@
             <tr>
                 <td>{{ $index + 1 }}</td>
                 <td class="text-start">{{ $detail->item->itemName2 ?? '—' }}</td>
-                <td>{{ $detail->type->name ?? '—' }}</td>
                 <td>{{ $detail->code ?? '—' }}</td>
                 <td>{{ $detail->unit->UnitName ?? '—' }}</td>
                 <td>{{ number_format((float) $detail->quantity, 2) }}</td>
@@ -395,7 +393,7 @@
             </tr>
         @empty
             <tr>
-                <td colspan="8" style="text-align: center; padding: 20px; color: #6c757d;">
+                <td colspan="7" style="text-align: center; padding: 20px; color: #6c757d;">
                     لا توجد أصناف
                 </td>
             </tr>

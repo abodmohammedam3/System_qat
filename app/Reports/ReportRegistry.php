@@ -8,8 +8,12 @@ use App\Reports\Accounting\GeneralLedgerReport;
 use App\Reports\Accounting\AccountStatementReport;
 use App\Reports\Vouchers\VouchersReport;
 use App\Reports\Inventory\ItemLedgerReport;
+use App\Reports\Inventory\SourceTraceReport;
 use App\Reports\Sales\SalesInvoicesReport;
+use App\Reports\Sales\SalesReturnsReport;
+use App\Reports\Purchases\DistributionReport;
 use App\Reports\Purchases\PurchaseInvoicesReport;
+use App\Reports\Purchases\PurchaseReturnsReport;
 use InvalidArgumentException;
 
 /**
@@ -31,8 +35,12 @@ class ReportRegistry
         'account-statement' => AccountStatementReport::class,
         'vouchers'          => VouchersReport::class,
         'item-ledger'       => ItemLedgerReport::class,
+        'source-trace'      => SourceTraceReport::class,
         'sales-invoices'    => SalesInvoicesReport::class,
+        'sales-returns'     => SalesReturnsReport::class,
         'purchase-invoices' => PurchaseInvoicesReport::class,
+        'purchase-returns'  => PurchaseReturnsReport::class,
+        'distributions'     => DistributionReport::class,
     ];
 
     /**

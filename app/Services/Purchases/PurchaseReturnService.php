@@ -453,16 +453,19 @@ class PurchaseReturnService
            (سطر الفاتورة لا يحمل مخزنًا؛ purchase_invoice_details بلا warehouse_id).
            وتمييزاً لكمية المرتجع المستثنى (exceptReturnId) الذي لا يزال
            مستندها قابل للحفظ — نفس منطق validateStockAvailability أدناه. */
-        $warehouseId = optional($invoiceDetail->purchaseInvoice)->warehouse_id;
+        $invoice = $invoiceDetail->purchaseInvoice;
+        $warehouseId = $invoice?->warehouse_id;
+        $supplierId = $invoice?->account_id ? (int) $invoice->account_id : null;
 
         if (!$warehouseId) {
             return $invoiceLimit;
         }
 
-        $stock = $this->inventoryService->availableQuantity(
+        $stock = $this->inventoryService->availableQuantityForSupplier(
             (int) $invoiceDetail->item_id,
             (int) $warehouseId,
-            $invoiceDetail->unit_id !== null ? (int) $invoiceDetail->unit_id : null
+            $invoiceDetail->unit_id !== null ? (int) $invoiceDetail->unit_id : null,
+            $supplierId
         );
 
         if ($exceptReturnId) {
@@ -847,15 +850,19 @@ class PurchaseReturnService
             $stockNeeds[$key] = ($stockNeeds[$key] ?? 0) + $qty;
         }
 
+        $firstDetail = !empty($details) ? PurchaseInvoiceDetail::find((int) ($details[0]['purchase_invoice_detail_id'] ?? 0)) : null;
+        $supplierId = $firstDetail?->purchaseInvoice?->account_id ? (int) $firstDetail->purchaseInvoice->account_id : null;
+
         foreach ($stockNeeds as $key => $neededQty) {
             [$itemId, $unitId] = explode('|', $key);
             $itemId = (int) $itemId;
             $unitId = (int) $unitId;
 
-            $stock = $this->inventoryService->availableQuantity(
+            $stock = $this->inventoryService->availableQuantityForSupplier(
                 $itemId,
                 (int) $warehouseId,
-                $unitId > 0 ? $unitId : null
+                $unitId > 0 ? $unitId : null,
+                $supplierId
             );
 
             if ($exceptReturnId) {

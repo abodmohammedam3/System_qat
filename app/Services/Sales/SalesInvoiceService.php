@@ -383,25 +383,86 @@ public function update(int $id, array $data): SalesInvoice
     // =========================================================
     protected function validateStockAvailability(array $details): void
     {
-        $errors = [];
-
-        foreach ($details as $i => $row) {
-            $itemId      = $row['item_id'] ?? null;
-            $warehouseId = $row['warehouse_id'] ?? null;
-            $unitId      = $row['unit_id'] ?? null;
-            $supplierId  = !empty($row['supplier_account_id'])
-                ? (int) $row['supplier_account_id']
-                : null;
+        $pairs = [];
+        foreach ($details as $row) {
+            $itemId      = (int) ($row['item_id'] ?? 0);
+            $warehouseId = (int) ($row['warehouse_id'] ?? 0);
+            $unitId      = isset($row['unit_id']) && $row['unit_id'] !== null ? (int) $row['unit_id'] : null;
+            $supplierId  = !empty($row['supplier_account_id']) ? (int) $row['supplier_account_id'] : null;
             $qty         = (float) ($row['quantity'] ?? 0);
 
             if (!$itemId || !$warehouseId || $qty <= 0) continue;
 
-            $available = $this->inventoryService->availableQuantityForSupplier(
-                (int) $itemId,
-                (int) $warehouseId,
-                $unitId !== null ? (int) $unitId : null,
-                $supplierId
-            );
+            $key = $itemId . '|' . $warehouseId . '|' . ($unitId ?? '*') . '|' . ($supplierId ?? 'null');
+            $pairs[$key] = [$itemId, $warehouseId, $unitId, $supplierId];
+        }
+
+        if (empty($pairs)) return;
+
+        $inMap = [];
+        $outMap = [];
+
+        $buildFilter = function ($q) use ($pairs) {
+            $q->where(function ($outer) use ($pairs) {
+                foreach ($pairs as [$itemId, $warehouseId, $unitId, $supplierId]) {
+                    $outer->orWhere(function ($sub) use ($itemId, $warehouseId, $unitId, $supplierId) {
+                        $sub->where('inventory_movement_details.item_id', $itemId)
+                            ->where('inventory_movement_details.warehouse_id', $warehouseId);
+                        if ($unitId !== null) {
+                            $sub->where('inventory_movement_details.unit_id', $unitId);
+                        }
+                        if ($supplierId === null) {
+                            $sub->whereNull('inventory_movement_details.supplier_account_id');
+                        } else {
+                            $sub->where('inventory_movement_details.supplier_account_id', $supplierId);
+                        }
+                    });
+                }
+            });
+        };
+
+        $inRows = InventoryMovementDetail::query()
+            ->join('inventory_movements', 'inventory_movements.movement_id', '=', 'inventory_movement_details.movement_id')
+            ->tap($buildFilter)
+            ->where('inventory_movements.direction', 'in')
+            ->groupBy('inventory_movement_details.item_id', 'inventory_movement_details.warehouse_id', 'inventory_movement_details.unit_id', 'inventory_movement_details.supplier_account_id')
+            ->selectRaw('inventory_movement_details.item_id, inventory_movement_details.warehouse_id, inventory_movement_details.unit_id, inventory_movement_details.supplier_account_id, COALESCE(SUM(inventory_movement_details.quantity), 0) as qty')
+            ->get();
+
+        foreach ($inRows as $r) {
+            $kExact = $r->item_id . '|' . $r->warehouse_id . '|' . ($r->unit_id ?? 'null') . '|' . ($r->supplier_account_id ?? 'null');
+            $kAnyUnit = $r->item_id . '|' . $r->warehouse_id . '|*|' . ($r->supplier_account_id ?? 'null');
+            $inMap[$kExact] = ($inMap[$kExact] ?? 0.0) + (float) $r->qty;
+            $inMap[$kAnyUnit] = ($inMap[$kAnyUnit] ?? 0.0) + (float) $r->qty;
+        }
+
+        $outRows = InventoryMovementDetail::query()
+            ->join('inventory_movements', 'inventory_movements.movement_id', '=', 'inventory_movement_details.movement_id')
+            ->tap($buildFilter)
+            ->realOutflow()
+            ->groupBy('inventory_movement_details.item_id', 'inventory_movement_details.warehouse_id', 'inventory_movement_details.unit_id', 'inventory_movement_details.supplier_account_id')
+            ->selectRaw('inventory_movement_details.item_id, inventory_movement_details.warehouse_id, inventory_movement_details.unit_id, inventory_movement_details.supplier_account_id, COALESCE(SUM(inventory_movement_details.quantity), 0) as qty')
+            ->get();
+
+        foreach ($outRows as $r) {
+            $kExact = $r->item_id . '|' . $r->warehouse_id . '|' . ($r->unit_id ?? 'null') . '|' . ($r->supplier_account_id ?? 'null');
+            $kAnyUnit = $r->item_id . '|' . $r->warehouse_id . '|*|' . ($r->supplier_account_id ?? 'null');
+            $outMap[$kExact] = ($outMap[$kExact] ?? 0.0) + (float) $r->qty;
+            $outMap[$kAnyUnit] = ($outMap[$kAnyUnit] ?? 0.0) + (float) $r->qty;
+        }
+
+        $errors = [];
+        foreach ($details as $i => $row) {
+            $itemId      = $row['item_id'] ?? null;
+            $warehouseId = $row['warehouse_id'] ?? null;
+            $unitId      = $row['unit_id'] ?? null;
+            $supplierId  = !empty($row['supplier_account_id']) ? (int) $row['supplier_account_id'] : null;
+            $qty         = (float) ($row['quantity'] ?? 0);
+
+            if (!$itemId || !$warehouseId || $qty <= 0) continue;
+
+            $lookupKey = (int) $itemId . '|' . (int) $warehouseId . '|' . ($unitId !== null ? (int) $unitId : '*') . '|' . ($supplierId ?? 'null');
+            $available = ($inMap[$lookupKey] ?? 0.0) - ($outMap[$lookupKey] ?? 0.0);
 
             if ($available < $qty) {
                 $errors["details.{$i}.quantity"] =
@@ -475,17 +536,55 @@ public function update(int $id, array $data): SalesInvoice
 
         $movementTotal = 0;
 
+        // تجميع آخر تسعيرة لكل مجموعة (item, warehouse) دفعة واحدة لمنع N+1
+        $pricingMap = [];
+        $itemIds = $invoice->details->pluck('item_id')->unique()->filter()->values()->all();
+        $whIds   = $invoice->details->pluck('warehouse_id')->unique()->filter()->values()->all();
+        if (!empty($itemIds) && !empty($whIds)) {
+            $pricingRows = InventoryMovementDetail::query()
+                ->join('inventory_movements', 'inventory_movements.movement_id', '=', 'inventory_movement_details.movement_id')
+                ->whereIn('inventory_movement_details.item_id', $itemIds)
+                ->whereIn('inventory_movement_details.warehouse_id', $whIds)
+                ->where('inventory_movements.direction', 'in')
+                ->whereNotNull('inventory_movement_details.sale_price')
+                ->orderByDesc('inventory_movement_details.movement_detail_id')
+                ->select([
+                    'inventory_movement_details.item_id',
+                    'inventory_movement_details.warehouse_id',
+                    'inventory_movement_details.unit_id',
+                    'inventory_movement_details.supplier_account_id',
+                    'inventory_movement_details.sale_price',
+                    'inventory_movement_details.min_price',
+                    'inventory_movement_details.max_price',
+                ])
+                ->get();
+
+            foreach ($pricingRows as $pr) {
+                $kExact = $pr->item_id . '|' . $pr->warehouse_id . '|' . ($pr->unit_id ?? '*') . '|' . ($pr->supplier_account_id ?? '*');
+                $kNoSup = $pr->item_id . '|' . $pr->warehouse_id . '|' . ($pr->unit_id ?? '*') . '|*';
+                $kAny   = $pr->item_id . '|' . $pr->warehouse_id . '|*|*';
+                $val = [
+                    'sale_price' => (float) $pr->sale_price,
+                    'min_price'  => (float) $pr->min_price,
+                    'max_price'  => (float) $pr->max_price,
+                ];
+                if (!isset($pricingMap[$kExact])) $pricingMap[$kExact] = $val;
+                if (!isset($pricingMap[$kNoSup])) $pricingMap[$kNoSup] = $val;
+                if (!isset($pricingMap[$kAny]))   $pricingMap[$kAny]   = $val;
+            }
+        }
+
         foreach ($invoice->details as $detail) {
             $quantity  = (float) $detail->quantity;
             $unitCost  = (float) $detail->cost_price;
             $lineTotal = $quantity * $unitCost;
 
-            $lastPricing = $this->inventoryService->lastPricing(
-                (int) $detail->item_id,
-                (int) $detail->warehouse_id,
-                $detail->unit_id !== null ? (int) $detail->unit_id : null,
-                $detail->supplier_account_id !== null ? (int) $detail->supplier_account_id : null
-            );
+            $uKey = $detail->unit_id !== null ? (int) $detail->unit_id : '*';
+            $sKey = $detail->supplier_account_id !== null ? (int) $detail->supplier_account_id : '*';
+            $lastPricing = $pricingMap["{$detail->item_id}|{$detail->warehouse_id}|{$uKey}|{$sKey}"]
+                ?? $pricingMap["{$detail->item_id}|{$detail->warehouse_id}|{$uKey}|*"]
+                ?? $pricingMap["{$detail->item_id}|{$detail->warehouse_id}|*|*"]
+                ?? ['sale_price' => 0, 'min_price' => 0, 'max_price' => 0];
 
             InventoryMovementDetail::create([
                 'movement_id'  => $movement->movement_id,
@@ -764,6 +863,10 @@ public function update(int $id, array $data): SalesInvoice
 
     protected function saveDetails(SalesInvoice $invoice, array $details): void
     {
+        // خريطة تكلفة لكل مجموعة (item|warehouse|unit|supplier) — تمنع N+1
+        // عند تعدد الصفوف للمجموعة نفسها داخل الفاتورة الواحدة.
+        $lastCostMap = [];
+
         foreach ($details as $row) {
             $itemId      = (int) $row['item_id'];
             $warehouseId = (int) $row['warehouse_id'];
@@ -794,12 +897,18 @@ public function update(int $id, array $data): SalesInvoice
                     $supplierId
                 );
             } else {
-                $serverCost = $this->inventoryService->lastCostForSupplier(
-                    $itemId,
-                    $warehouseId,
-                    $unitId,
-                    $supplierId
-                );
+                $costKey = $itemId . '|' . $warehouseId . '|' . ($unitId ?? 0) . '|' . ($supplierId ?? 0);
+
+                if (! array_key_exists($costKey, $lastCostMap)) {
+                    $lastCostMap[$costKey] = $this->inventoryService->lastCostForSupplier(
+                        $itemId,
+                        $warehouseId,
+                        $unitId,
+                        $supplierId
+                    );
+                }
+
+                $serverCost = $lastCostMap[$costKey];
 
                 $uiCost = (float) ($row['cost_price'] ?? 0);
 

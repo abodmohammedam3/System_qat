@@ -33,7 +33,6 @@ class PurchaseInvoiceController extends Controller
 
         $invoice = PurchaseInvoice::with([
             'details.item',
-            'details.type',
             'details.unit',
             'supplierAccount',
             'warehouse',
