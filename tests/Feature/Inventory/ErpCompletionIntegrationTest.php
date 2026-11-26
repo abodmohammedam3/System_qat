@@ -378,10 +378,11 @@ class ErpCompletionIntegrationTest extends TestCase
         DB::disableQueryLog();
 
         // التحقق أن استعلامات تجميع المخزون لا تتكرر لكل صف (فقط 2 استعلامين: in و out)
-        $stockSumQueries = collect($queries)->filter(
-            fn ($q) => str_contains($q['query'], 'inventory_movement_details') && str_contains($q['query'], 'sum(')
-        )->count();
+        $matched = collect($queries)->filter(
+            fn ($q) => str_contains($q['query'], 'inventory_movement_details') && str_contains(strtolower($q['query']), 'sum(')
+        );
+        $stockSumQueries = $matched->count();
 
-        $this->assertLessThanOrEqual(4, $stockSumQueries);
+        $this->assertLessThanOrEqual(4, $stockSumQueries, $matched->pluck('query')->implode("\n"));
     }
 }
